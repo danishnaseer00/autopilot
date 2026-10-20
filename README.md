@@ -43,10 +43,13 @@ platform manifests, infrastructure ops). This tree is code only.
 
 ## Status
 
-Phase 0+1 + SPEC-07 landed. `shared/` (SPEC-06), `control/` shell, `build/`
-detection (SPEC-07), `migrations/` (SPEC-03), `tests/contract/` and this
-file's dev-stack recipe are real. Worker directories still contain only their
-READMEs until their phase opens.
+Phase 0+1 + SPEC-07, SPEC-08, SPEC-18 and SPEC-13 landed. `shared/` (SPEC-06
+manifest + canonical hash), `build/` detection and git integration, `runtime/`
+secrets envelope and deployment lifecycle, `migrations/` (SPEC-03) and
+`tests/contract/` are real. Migration `202610201007` adds the SPEC-08
+persistence tables and SPEC-13's staged deploy inputs. In flight: SPEC-09
+(build pipeline, Worker A) and SPEC-14 (runtime service, Worker B). Cluster E2E
+for SPEC-07/13 and the fresh-volume apply are still owed by the coordinator.
 
 ## Fast workflow (every session)
 
