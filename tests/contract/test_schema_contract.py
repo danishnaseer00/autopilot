@@ -82,6 +82,8 @@ TENANT_TABLES = [
     "incidents",
     "incident_actions",
     "diagnoses",
+    "preview_hostnames",
+    "webhook_deliveries",
 ]
 
 
@@ -117,10 +119,13 @@ def _provision_tenant(conn, tag: str) -> dict:
                 org_id, uid)
         user_ids.append(uid)
 
+    # provider_repo_id is globally unique (SPEC-08 R-5): derive one per run so
+    # repeated / concurrent pytest runs never collide
+    provider_repo_id = (uuidlib.uuid4().int % 9_000_000_000) + 1_000_000_000
     project_id = _one(conn,
         "INSERT INTO projects (org_id, name, slug, provider, provider_repo_id, "
-        "k8s_namespace) VALUES (%s, %s, %s, 'github', 9901, %s) RETURNING id",
-        org_id, f"proj-{tag}", f"repo-{tag}", f"org-{tag}")
+        "k8s_namespace) VALUES (%s, %s, %s, 'github', %s, %s) RETURNING id",
+        org_id, f"proj-{tag}", f"repo-{tag}", provider_repo_id, f"org-{tag}")
 
     # project_branches has NO id column: its key is (project_id, git_ref)
     branch_ref = _one(conn,
@@ -155,6 +160,17 @@ def _provision_tenant(conn, tag: str) -> dict:
         "INSERT INTO domains (org_id, project_id, hostname, verification_token) "
         "VALUES (%s, %s, %s, 'contract-txt-token') RETURNING id",
         org_id, project_id, f"{tag}-custom.example.test")
+
+    preview_id = _one(conn,
+        "INSERT INTO preview_hostnames (org_id, project_id, ref_kind, ref_key, hostname) "
+        "VALUES (%s, %s, 'branch', 'branch:main', %s) RETURNING id",
+        org_id, project_id, f"br-main-{tag}.preview.example.test")
+
+    delivery_id = _one(conn,
+        "INSERT INTO webhook_deliveries (org_id, project_id, provider, delivery_id, "
+        "event, ref, sha) VALUES (%s, %s, 'github', %s, 'push', "
+        "'refs/heads/main', %s) RETURNING id",
+        org_id, project_id, f"delivery-{tag}", f"sha:{tag}")
 
     credential_id = _one(conn,
         "INSERT INTO credentials (org_id, project_id, provider, ciphertext, data_key, "
@@ -210,6 +226,7 @@ def _provision_tenant(conn, tag: str) -> dict:
     return {
         "org_id": org_id,
         "project_id": project_id,
+        "provider_repo_id": provider_repo_id,
         "deployment_id": deployment_id,
         "user_ids": user_ids,
         "rows": {
@@ -222,6 +239,8 @@ def _provision_tenant(conn, tag: str) -> dict:
             "routes": route_id,
             "env_vars": env_var_id,
             "domains": domain_id,
+            "preview_hostnames": preview_id,
+            "webhook_deliveries": delivery_id,
             "credentials": credential_id,
             "subscriptions": subscription_id,
             "billing_events": billing_event_id,
@@ -477,3 +496,90 @@ def test_audit_db_writable_by_audit_role_not_app():
             "OR has_table_privilege(current_user, 'audit_log', 'INSERT')"
         ).fetchone()[0]
         assert not has_privileges, "the app role must have NO audit_log privileges"
+
+
+# ===== 2026-10-20 amendment: SPEC-08 persistence + SPEC-13 staged inputs ====
+
+def test_projects_provider_repo_id_is_globally_unique(migrator, org_a, org_b):
+    """SPEC-08 R-5: one webhook secret per project assumes a repo maps to one
+    project; two orgs cannot claim the same provider repo."""
+    _expect_violation(
+        migrator,
+        "INSERT INTO projects (org_id, name, slug, provider, provider_repo_id, "
+        "k8s_namespace) VALUES (%s, 'dup', 'dup-repo', 'github', %s, 'ns-dup')",
+        pgerr.UniqueViolation,
+        org_b["org_id"], org_a["provider_repo_id"],
+    )
+
+
+def test_project_branches_position_defaults_to_zero(migrator, org_a):
+    position = migrator.execute(
+        "SELECT position FROM project_branches "
+        "WHERE project_id = %s AND git_ref = 'refs/heads/main'",
+        (org_a["project_id"],),
+    ).fetchone()[0]
+    assert position == 0
+
+
+def test_webhook_delivery_id_is_unique_per_provider(migrator, org_a):
+    delivery = f"delivery-dup-{uuidlib.uuid4().hex[:8]}"
+    _one(migrator,
+        "INSERT INTO webhook_deliveries (org_id, project_id, provider, delivery_id, "
+        "event) VALUES (%s, %s, 'github', %s, 'push') RETURNING id",
+        org_a["org_id"], org_a["project_id"], delivery)
+    _expect_violation(
+        migrator,
+        "INSERT INTO webhook_deliveries (org_id, project_id, provider, delivery_id, "
+        "event) VALUES (%s, %s, 'github', %s, 'push')",
+        pgerr.UniqueViolation,
+        org_a["org_id"], org_a["project_id"], delivery,
+    )
+
+
+def test_preview_hostname_is_stable_per_ref_and_globally_unique(migrator, org_a, org_b):
+    hostname = f"pr-1-{uuidlib.uuid4().hex[:8]}.preview.example.test"
+    _one(migrator,
+        "INSERT INTO preview_hostnames (org_id, project_id, ref_kind, ref_key, "
+        "hostname) VALUES (%s, %s, 'pr', 'pr:1', %s) RETURNING id",
+        org_a["org_id"], org_a["project_id"], hostname)
+    # (project, ref) is the stability key: one hostname per PR/branch, forever
+    _expect_violation(
+        migrator,
+        "INSERT INTO preview_hostnames (org_id, project_id, ref_kind, ref_key, "
+        "hostname) VALUES (%s, %s, 'pr', 'pr:1', %s)",
+        pgerr.UniqueViolation,
+        org_a["org_id"], org_a["project_id"],
+        f"other-{uuidlib.uuid4().hex[:8]}.test",
+    )
+    # hostname is globally unique: the route reconciler keys on it
+    _expect_violation(
+        migrator,
+        "INSERT INTO preview_hostnames (org_id, project_id, ref_kind, ref_key, "
+        "hostname) VALUES (%s, %s, 'pr', 'pr:1', %s)",
+        pgerr.UniqueViolation,
+        org_b["org_id"], org_b["project_id"], hostname,
+    )
+
+
+def test_deployments_ready_requires_build_inputs(migrator, org_a):
+    """SPEC-13 inserts at step 1; a ready row must carry the resolved inputs."""
+    _expect_violation(
+        migrator,
+        "INSERT INTO deployments (project_id, org_id, git_sha, git_ref, "
+        "environment, trigger_source, status, revision, build_env_keys) "
+        "VALUES (%s, %s, %s, 'refs/heads/main', 'production', 'manual', "
+        "'ready', 'rev-x', '{}')",
+        pgerr.CheckViolation,
+        org_a["project_id"], org_a["org_id"],
+        f"sha:ready-{uuidlib.uuid4().hex[:8]}",
+    )
+
+
+def test_deployments_queued_may_defer_build_inputs(migrator, org_a):
+    _one(migrator,
+        "INSERT INTO deployments (project_id, org_id, git_sha, git_ref, "
+        "environment, trigger_source, build_env_keys) "
+        "VALUES (%s, %s, %s, 'refs/heads/main', 'production', 'manual', '{}') "
+        "RETURNING id",
+        org_a["project_id"], org_a["org_id"],
+        f"sha:queued-{uuidlib.uuid4().hex[:8]}")

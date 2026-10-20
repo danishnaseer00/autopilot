@@ -8,6 +8,11 @@ shared/tests must keep passing for both suites.
 """
 
 from platform_shared.manifest.graph import GraphDoc, build_graph
+from platform_shared.manifest.hash import (
+    ManifestHashError,
+    canonical_manifest_json,
+    manifest_hash,
+)
 from platform_shared.manifest.models import ManifestDocument
 from platform_shared.manifest.validate import (
     ManifestValidationError,
@@ -19,9 +24,12 @@ from platform_shared.manifest.validate import (
 __all__ = [
     "GraphDoc",
     "ManifestDocument",
+    "ManifestHashError",
     "ManifestValidationError",
     "ManifestYamlError",
     "ValidatedManifest",
     "build_graph",
+    "canonical_manifest_json",
+    "manifest_hash",
     "parse_manifest",
 ]
