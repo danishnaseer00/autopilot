@@ -191,6 +191,7 @@ source = { editable = "runtime" }
 dependencies = [
     { name = "asyncpg" },
     { name = "cryptography" },
+    { name = "httpx" },
     { name = "platform-shared" },
 ]
 
@@ -198,6 +199,7 @@ dependencies = [
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "cryptography", specifier = ">=43.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "platform-shared", editable = "shared" },
 ]
 

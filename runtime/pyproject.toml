@@ -8,6 +8,7 @@ requires-python = ">=3.11"
 dependencies = [
   "cryptography>=43.0",
   "asyncpg>=0.29",
+  "httpx>=0.27",
   "platform-shared",
 ]
 
