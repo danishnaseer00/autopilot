@@ -1,0 +1,69 @@
+version: 1
+name: acme-storefront
+
+services:
+  - name: frontend
+    source: ./apps/web
+    type: static              # static | node | python
+    build:
+      strategy: auto          # auto | dockerfile | buildpack | none
+      dockerfile: Dockerfile  # when strategy=dockerfile
+    runtime:
+      port: 3000
+      command: ["npm", "start"]
+    healthcheck:
+      path: /healthz
+      intervalSeconds: 10
+      failureThreshold: 3
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits:   { cpu: 500m, memory: 512Mi }
+    env:
+      BACKEND_URL: ${BACKEND_URL}
+
+  - name: backend
+    source: ./apps/api
+    type: node
+    build: { strategy: buildpack }
+    runtime:
+      port: 8000
+      command: ["python", "-m", "uvicorn", "main:app"]
+    dependsOn: [database]
+    healthcheck: { path: /healthz }
+    resources:
+      requests: { cpu: 200m, memory: 256Mi }
+      limits:   { cpu: "1", memory: 1Gi }
+    env:
+      DATABASE_URL: ${DATABASE_URL}
+
+  - name: database
+    source: ./infra/postgres
+    type: stateful             # stateless | stateful
+    image: postgres:16-alpine
+    runtime:
+      port: 5432
+      persistentVolume:
+        sizeGi: 10
+        storageClass: standard
+    resources:
+      requests: { cpu: 250m, memory: 512Mi }
+      limits:   { cpu: "1", memory: 2Gi }
+
+exposure:
+  productionHostname: acme.com          # requires a verified domain (spec 09)
+  previewPattern: "pr-{pr}-{repo}-{sha8}.preview.example.com"
+  routes:
+    - path: /
+      service: frontend
+    - path: /api
+      service: backend
+      stripPrefix: true
+
+observability:
+  prometheus:
+    scrape: true
+    path: /metrics
+  traces:
+    enabled: true
+  logs:
+    shipped: true

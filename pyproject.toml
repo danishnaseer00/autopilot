@@ -1,0 +1,32 @@
+# uv workspace root for the paas/ monorepo. One shared .venv for all members:
+#   cd paas && uv sync        (installs every member editable + dev tools)
+#   uv run pytest             (runs shared + control + contract suites)
+# Spec directories (build/, runtime/, console/, autopilot/) join the workspace
+# when their pyproject.toml files land - add them to [tool.uv.workspace.members].
+[project]
+name = "autopilot-paas"
+version = "0.0.0"
+requires-python = ">=3.11"
+# Depending on the members from the virtual root keeps a single environment for
+# the whole monorepo (pytest, mypy, and one interpreter for every session).
+dependencies = [
+  "platform-shared",
+  "autopilot-control",
+]
+
+[tool.uv.workspace]
+members = ["shared", "control"]
+
+[tool.uv.sources]
+platform-shared = { workspace = true }
+autopilot-control = { workspace = true }
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["shared/tests", "control/tests", "tests"]
+addopts = "-q"
