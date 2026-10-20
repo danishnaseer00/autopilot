@@ -31,6 +31,9 @@ class _Strict(BaseModel):
 class BuildBlock(_Strict):
     strategy: Literal["auto", "dockerfile", "buildpack", "none"] = "auto"
     dockerfile: StrictStr | None = None
+    # SPEC-07 AC-4 / R-3: the explicit layer. Overrides framework detection.
+    command: list[StrictStr] | None = None
+    outputDir: StrictStr | None = None
 
 
 class PersistentVolume(_Strict):

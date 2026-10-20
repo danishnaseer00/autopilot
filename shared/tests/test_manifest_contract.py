@@ -217,3 +217,20 @@ def test_ac1_explicit_build_strategy_is_preserved():
     assert web.build is not None
     assert web.build.strategy == "dockerfile"  # explicit beats detected default
     assert web.build.dockerfile == "Dockerfile"
+
+
+def test_build_command_and_output_dir_are_carried():
+    """SPEC-07 AC-4 needs an explicit build command; the manifest must carry
+    it (amendment 2026-10-20, additive: both keys stay optional)."""
+    document = BASE.replace(
+        "    build: { strategy: dockerfile, dockerfile: Dockerfile }",
+        "    build:\n"
+        "      strategy: dockerfile\n"
+        "      dockerfile: Dockerfile\n"
+        "      command: ['npm', 'run', 'build']\n"
+        "      outputDir: dist",
+    )
+    web = parse(document).services[0]
+    assert web.build is not None
+    assert web.build.command == ["npm", "run", "build"]
+    assert web.build.outputDir == "dist"
