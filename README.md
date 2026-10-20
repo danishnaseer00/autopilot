@@ -39,9 +39,14 @@ platform manifests, infrastructure ops). This tree is code only.
   interface.
 - 2026-10-20 — **Tooling: uv workspaces** under `paas/` (one shared .venv,
   editable member packages). `paas/pyproject.toml` is the virtual root;
-  `uv sync` + `uv run pytest` are the only commands a session needs.</think><tool_call>edit<arg_key>newString</arg_key><arg_value>Status: Phase 0+1 landed. `shared/` (SPEC-06), `control/` shell, `migrations/`
-(SPEC-03), `tests/contract/` and this file's dev-stack recipe are real.
-Worker directories still contain only their READMEs until their phase opens.
+  `uv sync` + `uv run pytest` are the only commands a session needs.
+
+## Status
+
+Phase 0+1 + SPEC-07 landed. `shared/` (SPEC-06), `control/` shell, `build/`
+detection (SPEC-07), `migrations/` (SPEC-03), `tests/contract/` and this
+file's dev-stack recipe are real. Worker directories still contain only their
+READMEs until their phase opens.
 
 ## Fast workflow (every session)
 
