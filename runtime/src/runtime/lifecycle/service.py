@@ -43,7 +43,6 @@ from runtime.lifecycle.models import (
 )
 from runtime.lifecycle.queue import BuildQueue, PostgresBuildQueue
 from runtime.lifecycle.state import (
-    ACTIVE_STATUSES,
     DrainPolicy,
     assert_actor_type,
     assert_ready_invariants,
@@ -151,16 +150,17 @@ class DeploymentLifecycle:
         await self._require_project(conn, org, project)
         await self._lock(conn, idempotency_key(project, sha, ref))
 
+        # Literal statuses (not a parameter) let PostgreSQL prove the partial
+        # index predicate. Keep them in sync with state.ACTIVE_STATUSES.
         existing = await conn.fetchrow(
             f"SELECT {_COLUMNS} FROM deployments "
             "WHERE org_id = $1 AND project_id = $2 AND git_sha = $3 "
-            "  AND git_ref = $4 AND status::text = ANY($5::text[]) "
+            "  AND git_ref = $4 AND status IN ('queued', 'building') "
             "ORDER BY created_at DESC LIMIT 1",
             org,
             project,
             sha,
             ref,
-            sorted(ACTIVE_STATUSES),
         )
         if existing is not None:
             return TriggerResult(deployment_from_row(existing), created=False)
@@ -311,14 +311,13 @@ class DeploymentLifecycle:
             )
         assert_transition(current, "ready", deployment_id=deployment)
 
-        newer = await self._newer_peer(
+        newer = await self._newer_live(
             conn,
             org=org,
             project=row["project_id"],
             git_ref=row["git_ref"],
             created_at=row["created_at"],
             exclude_id=deployment,
-            statuses=("live",),
         )
         if newer is not None:
             row = await conn.fetchrow(
@@ -492,14 +491,13 @@ class DeploymentLifecycle:
             )
 
         if current == "ready":
-            newer = await self._newer_peer(
+            newer = await self._newer_live(
                 conn,
                 org=org,
                 project=row["project_id"],
                 git_ref=row["git_ref"],
                 created_at=row["created_at"],
                 exclude_id=deployment,
-                statuses=("live",),
             )
             if newer is not None:
                 # A newer commit is already serving; this stale build must not
@@ -518,14 +516,13 @@ class DeploymentLifecycle:
                 return PromotionResult(deployment_from_row(row), 0, (), True)
 
         if current == "live":
-            newer_live = await self._newer_peer(
+            newer_live = await self._newer_live(
                 conn,
                 org=org,
                 project=row["project_id"],
                 git_ref=row["git_ref"],
                 created_at=row["created_at"],
                 exclude_id=deployment,
-                statuses=("live",),
             )
             if newer_live is not None:
                 raise DeploymentNotReady(
@@ -811,7 +808,7 @@ class DeploymentLifecycle:
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key
         )
 
-    async def _newer_peer(
+    async def _newer_live(
         self,
         conn: asyncpg.Connection,
         *,
@@ -820,19 +817,17 @@ class DeploymentLifecycle:
         git_ref: str,
         created_at: Any,
         exclude_id: uuid.UUID,
-        statuses: Sequence[str],
     ) -> uuid.UUID | None:
         return await conn.fetchval(
             "SELECT id FROM deployments "
             " WHERE org_id = $1 AND project_id = $2 AND git_ref = $3 "
-            "   AND id <> $4 AND status::text = ANY($5::text[]) "
-            "   AND created_at > $6 "
+            "   AND id <> $4 AND status = 'live' "
+            "   AND created_at > $5 "
             " ORDER BY created_at DESC LIMIT 1",
             org,
             project,
             git_ref,
             exclude_id,
-            list(statuses),
             created_at,
         )
 
@@ -851,7 +846,7 @@ class DeploymentLifecycle:
             "   SET status = 'superseded', finished_at = now(), "
             "       superseded_by = $5 "
             " WHERE org_id = $1 AND project_id = $2 AND git_ref = $3 "
-            "   AND id <> $5 AND status::text IN ('ready', 'live') "
+            "   AND id <> $5 AND status IN ('ready', 'live') "
             "   AND created_at < $4 "
             "RETURNING id",
             org,
@@ -1004,7 +999,7 @@ class DeploymentLifecycle:
             "UPDATE build_jobs "
             "   SET status = 'cancelled', updated_at = now() "
             " WHERE org_id = $1 AND deployment_id = ANY($2::uuid[]) "
-            "   AND status::text IN ('pending', 'running')",
+            "   AND status IN ('pending', 'running')",
             org,
             list(deployment_ids),
         )
