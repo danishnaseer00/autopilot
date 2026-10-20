@@ -118,12 +118,14 @@ name = "autopilot-build"
 version = "0.1.0"
 source = { editable = "build" }
 dependencies = [
+    { name = "fastapi" },
     { name = "platform-shared" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
     { name = "platform-shared", editable = "shared" },
     { name = "pydantic", specifier = ">=2.7" },
 ]
