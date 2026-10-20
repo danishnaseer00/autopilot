@@ -178,14 +178,26 @@ class WebhookService:
 
         if payload is None or not event_type or repo_id is None:
             return _reject("invalid_payload")
-        try:
-            delivery_id = validate_delivery_id(delivery_header)
-        except WebhookHeaderError:
-            return _reject("invalid_payload")
 
         payload_repo_id = repository_id_from_payload(payload)
         if payload_repo_id != repo_id:
             # A signed payload must be for the repository its URL selected.
+            return _reject("invalid_payload")
+
+        if project is None:
+            # AC-2: stop at the same point as the invalid-signature path. An
+            # unknown repo needs no delivery claim, no event parse and no audit
+            # row, so there is no extra work to distinguish by timing.
+            self._logger.debug(
+                "verified webhook for unknown repository delivery=%s repo_id=%s",
+                delivery_header,
+                repo_id,
+            )
+            return WebhookOutcome(202, "unknown_repo")
+
+        try:
+            delivery_id = validate_delivery_id(delivery_header)
+        except WebhookHeaderError:
             return _reject("invalid_payload")
 
         if not await self._store.claim_delivery(delivery_id):
@@ -215,7 +227,7 @@ class WebhookService:
     async def _dispatch(
         self,
         *,
-        project: Project | None,
+        project: Project,
         payload: dict[str, object],
         event_type: str,
         delivery_id: str,
@@ -230,14 +242,6 @@ class WebhookService:
 
         action = event_action(payload)
         git_ref, git_sha = _event_facts(event)
-
-        if project is None:
-            self._logger.debug(
-                "verified webhook for unknown repository delivery=%s repo_id=%s",
-                delivery_id,
-                getattr(event, "repo_id", None),
-            )
-            return WebhookOutcome(202, "unknown_repo")
 
         await self._record_rate_limit(project, now)
 

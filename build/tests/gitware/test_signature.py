@@ -139,6 +139,10 @@ def test_unknown_repo_and_bad_signature_do_the_same_work(
     assert bad.status_code == 400
     assert len(verification_calls) == 2
     assert store.find_calls == 2
+    # Neither path may do a delivery claim or reach the queue: the only work
+    # difference is the final branch, not a database write or a JSON event parse.
+    assert store.claim_calls == 0
+    assert store.record_intent_calls == 0
 
 
 def test_unknown_repo_with_a_bad_signature_is_still_400(
