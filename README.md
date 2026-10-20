@@ -4,9 +4,63 @@
 contracts, not code). `deploy/` stays at the repo root (node provisioning +
 platform manifests, infrastructure ops). This tree is code only.
 
-Status: directories + READMEs only. Real files land when their spec's phase
-opens — starting with SPEC-03 (schema) and SPEC-06 (manifest), which are the
-coordinator's job, then the worker tracks fill their own directories.
+- 2026-10-20 — **Coordinator role confirmed.** Workers code in their worktrees
+  and stop-report; the coordinator reviews every diff against the spec's
+  acceptance criteria, runs the SPEC-38 isolation suite + security gate on the
+  merged state, and merges one branch at a time. Done = acceptance criteria
+  passing, not vibes.
+- 2026-10-20 — **Phase 0+1 landed (coordinator).** SPEC-03 baseline migrations
+  (`paas/migrations/`), uv workspace (`paas/`), `platform_shared` manifest
+  package (SPEC-06), FastAPI shell (`paas/control`), contract test suites
+  (`paas/tests/contract/`, `paas/shared/tests/`), dev compose stack
+  (`paas/docker-compose.dev.yml` + `docker-init/`). Spec amendments below.
+- 2026-10-20 — **SPEC-03 findings applied (§9 process).**
+  (a) `project_branches` gained `org_id NOT NULL` — R-1 needs the
+  denormalised column for a fast RLS predicate, not a per-row subquery; spec
+  §4.2 amended.
+  (b) `incidents` gained `resolved_requires_recovery` CHECK — AC-14 demanded
+  it but the CREATE TABLE omitted it; spec §4.14 amended.
+  (c) `data_class` is baked into every CREATE TABLE (§4.15 wrote ALTERs for an
+  evolved DB) and carries a `CHECK (data_class IN ('C1','C2','C3','C4'))` so
+  a wrong class is a database error, not a review catch. Tables not listed in
+  §4.15 default to `C3` (operational) — review when SPEC-10/12/13 land.
+  (d) `route_history` stays platform-append-only without RLS (rows keyed by
+  hostname); `users` is not RLS'd (platform-wide identity, no org column) —
+  SPEC-05 must revisit when sessions/auth land.
+  (e) `usage_daily` is a plain table for now; the TimescaleDB hypertable
+  conversion is a later forward-only migration (extension optional at apply
+  time, ADR-6 preserved).
+- 2026-10-20 — **SPEC-06 route-edge interpretation (needs RCA sign-off, R-15).**
+  The §3 fixture implies: route edges go from the service holding the `" /"`
+  route to each other route's service (`/ → frontend, /api → backend` ⇒ edge
+  `frontend → backend`, which reproduces AC-10 exactly). Implemented in
+  `platform_shared.manifest.graph`. **Worker D must confirm this rule before
+  SPEC-35 consumes the graph** — it is the only ambiguous point in the shared
+  interface.
+- 2026-10-20 — **Tooling: uv workspaces** under `paas/` (one shared .venv,
+  editable member packages). `paas/pyproject.toml` is the virtual root;
+  `uv sync` + `uv run pytest` are the only commands a session needs.</think><tool_call>edit<arg_key>newString</arg_key><arg_value>Status: Phase 0+1 landed. `shared/` (SPEC-06), `control/` shell, `migrations/`
+(SPEC-03), `tests/contract/` and this file's dev-stack recipe are real.
+Worker directories still contain only their READMEs until their phase opens.
+
+## Fast workflow (every session)
+
+```bash
+# one-time (or after pulling): create the shared venv
+cd paas && uv sync
+
+# dev databases for unit/contract tests (Docker Desktop, tiny footprint)
+docker compose -f docker-compose.dev.yml up -d
+
+# apply the schema (repeat after pulling new migration files)
+uv run python migrations/apply.py
+
+# run everything a session is responsible for
+uv run pytest          # shared + control + tests/contract
+```
+
+Contract tests skip cleanly when `DATABASE_URL` is unset - set it from
+`.env.example` (copy to `paas/.env`) to actually exercise the schema.
 
 ## Ownership map (binding — see `../PARALLEL-PLAN.md` rule 1)
 
