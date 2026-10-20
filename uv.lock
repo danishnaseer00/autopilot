@@ -4,6 +4,7 @@ requires-python = ">=3.11"
 
 [manifest]
 members = [
+    "autopilot-build",
     "autopilot-control",
     "autopilot-paas",
     "platform-shared",
@@ -112,6 +113,21 @@ wheels = [
 ]
 
 [[package]]
+name = "autopilot-build"
+version = "0.1.0"
+source = { editable = "build" }
+dependencies = [
+    { name = "platform-shared" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "platform-shared", editable = "shared" },
+    { name = "pydantic", specifier = ">=2.7" },
+]
+
+[[package]]
 name = "autopilot-control"
 version = "0.1.0"
 source = { editable = "control" }
@@ -139,6 +155,7 @@ name = "autopilot-paas"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "autopilot-build" },
     { name = "autopilot-control" },
     { name = "platform-shared" },
 ]
@@ -151,6 +168,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "autopilot-build", editable = "build" },
     { name = "autopilot-control", editable = "control" },
     { name = "platform-shared", editable = "shared" },
 ]

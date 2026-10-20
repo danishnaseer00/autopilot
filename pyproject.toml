@@ -12,14 +12,16 @@ requires-python = ">=3.11"
 dependencies = [
   "platform-shared",
   "autopilot-control",
+  "autopilot-build",
 ]
 
 [tool.uv.workspace]
-members = ["shared", "control"]
+members = ["shared", "control", "build"]
 
 [tool.uv.sources]
 platform-shared = { workspace = true }
 autopilot-control = { workspace = true }
+autopilot-build = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -28,5 +30,5 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["shared/tests", "control/tests", "tests"]
+testpaths = ["shared/tests", "control/tests", "build/tests", "tests"]
 addopts = "-q"

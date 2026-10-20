@@ -1,0 +1,19 @@
+# autopilot-build: the build plane (SPEC-07..12). Worker A owns this package.
+# SPEC-07 (framework detection) is the only module here today; gitware/,
+# pipeline/, supplychain/, queue/ and registry/ join as their specs open.
+[project]
+name = "autopilot-build"
+version = "0.1.0"
+description = "AutoPilot build plane: framework detection and build-plan resolution (SPEC-07)"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.7",
+  "platform-shared",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/buildplane"]
