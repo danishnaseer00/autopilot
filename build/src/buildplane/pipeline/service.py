@@ -65,6 +65,7 @@ from buildplane.pipeline.sandbox import (
     new_container_name,
 )
 from buildplane.pipeline.strategy import ResolvedStrategy, resolve_strategy
+from buildplane.supplychain.controls import SupplyChainControls
 
 
 class JobQueue(Protocol):
@@ -110,6 +111,7 @@ class BuildPipeline:
         sandbox: SandboxRunner,
         log_store: LogStore,
         cache,
+        supply_chain: SupplyChainControls,
         redactor_factory: Callable[[Mapping[str, str]], Redactor],
         secret_provider: SecretProvider | None = None,
         fetch_token_provider: FetchTokenProvider | None = None,
@@ -127,6 +129,7 @@ class BuildPipeline:
         self.sandbox = sandbox
         self.log_store = log_store
         self.cache = cache
+        self.supply_chain = supply_chain
         self.redactor_factory = redactor_factory
         self.secret_provider = secret_provider
         self.fetch_token_provider = fetch_token_provider
@@ -202,7 +205,12 @@ class BuildPipeline:
             _safe_close(stream)
             return outcome
         except PipelineError as exc:
-            outcome = self._failure(claim, exc, progress.stage, log_uri=stream.uri)
+            outcome = self._failure(
+                claim,
+                exc,
+                _error_stage(exc, progress.stage),
+                log_uri=stream.uri,
+            )
             _safe_log(stream, _failure_line(outcome))
             _safe_close(stream)
             await self.reporter.report_failure(claim, outcome)
@@ -290,16 +298,36 @@ class BuildPipeline:
         _raise_if_lost(lost, claim)
 
         build_image = claim.build_image or self.builder_images.select(strategy.plan)
+        read_file = _reader_for(fetched, strategy.source)
+        supply_plan = await self.supply_chain.preflight(
+            claim=claim,
+            strategy=strategy,
+            build_image=build_image,
+            read_file=read_file,
+            now=self._clock(),
+        )
+        for notice in supply_plan.notices:
+            _safe_log(stream, f"stage=detect notice={notice}\n")
+        for warning in supply_plan.warnings:
+            _safe_log(stream, f"stage=detect warning={warning}\n")
+        _raise_if_lost(lost, claim)
+
+        effective_lockfile_hash = supply_plan.effective_lockfile_hash(
+            strategy.lockfile_hash
+        )
+        effective_strategy_id = supply_plan.effective_strategy_id(
+            strategy.strategy_id
+        )
         try:
             key = build_cache_key(
-                lockfile_hash=strategy.lockfile_hash,
-                strategy_id=strategy.strategy_id,
+                lockfile_hash=effective_lockfile_hash,
+                strategy_id=effective_strategy_id,
                 build_image=build_image,
                 manifest_hash=manifest_hash_value,
                 build_env_keys=claim.build_env_keys,
             )
             dependency_key = dependency_cache_key(
-                lockfile_hash=strategy.lockfile_hash,
+                lockfile_hash=effective_lockfile_hash,
                 build_image=build_image,
             )
         except ValueError as exc:
@@ -329,7 +357,9 @@ class BuildPipeline:
                 cache_hit=True,
                 output_hash=cached.output_hash,
                 node_version=strategy.plan.nodeVersion,
-                warnings=tuple(manifest_warnings) + strategy.detection.warnings,
+                warnings=tuple(manifest_warnings)
+                + strategy.detection.warnings
+                + supply_plan.warnings,
             )
             await self._finish_success(claim, outcome, stream)
             return outcome
@@ -340,6 +370,7 @@ class BuildPipeline:
             explicit_argv=strategy.explicit_argv,
             dockerfile=strategy.dockerfile,
             builder_image=build_image,
+            allowed_install_scripts=supply_plan.allowed_install_scripts,
         )
         container_name = new_container_name(claim.deployment_id, claim.git_sha)
         source_dir = _source_dir(fetched, strategy.source)
@@ -349,7 +380,7 @@ class BuildPipeline:
             workspace=fetched.root,
             source=strategy.source,
             container_name=container_name,
-            env=env,
+            env=_strategy_env(env, strategy.plan),
             resources=self.resources,
             timeout_seconds=self.timeout_seconds,
             labels={
@@ -371,6 +402,7 @@ class BuildPipeline:
                 f"build container exited with code {result.exit_code}",
                 exit_code=result.exit_code,
             )
+        self.supply_chain.post_build(supply_plan, read_file=read_file)
 
         output_hash = self.artifact_hasher(
             source_dir, relative=strategy.output_dir or "."
@@ -401,7 +433,9 @@ class BuildPipeline:
             cache_hit=False,
             output_hash=output_hash,
             node_version=strategy.plan.nodeVersion,
-            warnings=tuple(manifest_warnings) + strategy.detection.warnings,
+            warnings=tuple(manifest_warnings)
+            + strategy.detection.warnings
+            + supply_plan.warnings,
         )
         await self._finish_success(claim, outcome, stream)
         return outcome
@@ -601,6 +635,33 @@ class BuildPipeline:
             error_code=error.code,
             log_uri=log_uri,
         )
+
+
+def _error_stage(error: PipelineError, fallback: Stage) -> Stage:
+    try:
+        return Stage(error.stage)
+    except ValueError:
+        return fallback
+
+
+def _strategy_env(env: Mapping[str, str], plan) -> Mapping[str, str]:
+    """Keep buildpack-managed installs script-free.
+
+    Buildpacks invoke npm/yarn themselves, so the pipeline cannot append
+    ``--ignore-scripts`` to that argv. Their documented config environment
+    variables are the equivalent default. Explicit strategies do not receive
+    these because ``<pm> rebuild`` would inherit an ignore-scripts setting and
+    silently skip the one audited package the exception exists for.
+    """
+
+    if not plan.buildpack:
+        return env
+    values = dict(env)
+    values["NPM_CONFIG_IGNORE_SCRIPTS"] = "true"
+    values["YARN_ENABLE_SCRIPTS"] = "false"
+    values["YARN_IGNORE_SCRIPTS"] = "true"
+    values["PNPM_IGNORE_SCRIPTS"] = "true"
+    return values
 
 
 def _raise_if_lost(lost: asyncio.Event, claim: ClaimedJob) -> None:

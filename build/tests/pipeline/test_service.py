@@ -17,6 +17,7 @@ from support import (
     ReplaceRedactor,
     builder_ref,
     make_claim,
+    make_supply_chain,
     tar_bytes,
 )
 
@@ -38,6 +39,7 @@ def _pipeline(
     log_store=None,
     secret_provider=None,
     token_provider=None,
+    supply_chain=None,
 ):
     claim = make_claim()
     return claim, BuildPipeline(
@@ -49,6 +51,7 @@ def _pipeline(
         sandbox=sandbox or FakeSandbox(),
         log_store=log_store or LocalLogStore(tmp_path / "logs"),
         cache=cache or InMemoryBuildCache(),
+        supply_chain=supply_chain or make_supply_chain(),
         redactor_factory=lambda env: ReplaceRedactor(env),
         secret_provider=secret_provider,
         fetch_token_provider=token_provider,
@@ -135,6 +138,7 @@ def test_secrets_are_passed_to_sandbox_but_redacted_from_logs(tmp_path):
         sandbox=sandbox,
         log_store=LocalLogStore(tmp_path / "logs"),
         cache=InMemoryBuildCache(),
+        supply_chain=make_supply_chain(),
         redactor_factory=lambda env: ReplaceRedactor(env),
         secret_provider=provider,
         timeout_seconds=10,
@@ -161,6 +165,7 @@ def test_missing_secret_provider_fails_before_any_sandbox(tmp_path):
         sandbox=FakeSandbox(),
         log_store=LocalLogStore(tmp_path / "logs"),
         cache=InMemoryBuildCache(),
+        supply_chain=make_supply_chain(),
         redactor_factory=lambda env: ReplaceRedactor(env),
         timeout_seconds=10,
         heartbeat_seconds=30,
@@ -205,6 +210,7 @@ def test_multiline_secret_fails_closed_before_the_sandbox(tmp_path):
         sandbox=FakeSandbox(),
         log_store=LocalLogStore(tmp_path / "logs"),
         cache=InMemoryBuildCache(),
+        supply_chain=make_supply_chain(),
         redactor_factory=lambda env: ReplaceRedactor(env),
         secret_provider=provider,
         timeout_seconds=10,
