@@ -66,6 +66,7 @@ from buildplane.gitware.previews import (
     branch_hostname_candidate,
     pull_request_hostname_candidate,
 )
+from buildplane.gitware.postgres_store import PostgresGitStore
 from buildplane.gitware.ratelimit import (
     DEFAULT_BURST_LIMIT,
     InMemoryRateLimiter,
@@ -141,6 +142,7 @@ __all__ = [
     "OwnershipVerifier",
     "PayloadTooLarge",
     "PingEvent",
+    "PostgresGitStore",
     "PreviewHostnameAllocator",
     "Project",
     "ProjectStatus",
