@@ -218,14 +218,16 @@ class PostgresBuildScriptExceptionStore:
                 await connection.execute(
                     """
                     INSERT INTO build_script_exceptions
-                      (project_id, package_name, granted_by, reason, expires_at)
-                    VALUES ($1, $2, $3, $4, $5)
+                      (org_id, project_id, package_name, granted_by, reason,
+                       expires_at)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (project_id, package_name) DO UPDATE
                     SET granted_by = EXCLUDED.granted_by,
                         reason = EXCLUDED.reason,
                         expires_at = EXCLUDED.expires_at,
                         granted_at = now()
                     """,
+                    _uuid(org_id),
                     _uuid(project_id),
                     package_name,
                     _uuid(granted_by),
@@ -241,9 +243,9 @@ class PostgresBuildScriptExceptionStore:
 
 
 async def _set_org(connection: asyncpg.Connection, org_id: str) -> None:
-    # The table is not RLS-protected in the ratified schema (finding logged in
-    # DECISIONS.md), but setting the context here means the store keeps working
-    # when the coordinator adds the missing policy.
+    # The table carries the standard tenant_isolation policy (migration
+    # 202610201010): every read and write must run with the tenant context set
+    # inside the same transaction.
     await connection.execute(
         "SELECT set_config('app.org_id', $1, true)",
         str(_uuid(org_id)),

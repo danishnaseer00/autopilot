@@ -71,6 +71,7 @@ TENANT_TABLES = [
     "project_branches",
     "deployments",
     "build_jobs",
+    "build_script_exceptions",
     "routes",
     "env_vars",
     "domains",
@@ -145,6 +146,12 @@ def _provision_tenant(conn, tag: str) -> dict:
         "SELECT d.id, d.org_id, d.project_id FROM deployments d "
         "WHERE d.id = %s RETURNING id",
         deployment_id)
+
+    exception_id = _one(conn,
+        "INSERT INTO build_script_exceptions (org_id, project_id, package_name, "
+        "granted_by, reason) VALUES (%s, %s, 'contract-pkg', %s, 'contract') "
+        "RETURNING id",
+        org_id, project_id, user_ids[0])
 
     route_id = _one(conn,
         "INSERT INTO routes (org_id, project_id, hostname, deployment_id, revision) "
@@ -236,6 +243,7 @@ def _provision_tenant(conn, tag: str) -> dict:
             "project_branches": branch_ref,
             "deployments": deployment_id,
             "build_jobs": build_job_id,
+            "build_script_exceptions": exception_id,
             "routes": route_id,
             "env_vars": env_var_id,
             "domains": domain_id,
