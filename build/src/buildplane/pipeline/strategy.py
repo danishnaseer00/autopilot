@@ -3,12 +3,12 @@
 This module is the seam between SPEC-07's pure detection result and the
 sandbox. It preserves the manifest's explicit build argv, chooses the lockfile
 whose bytes key the dependency layer, and derives the stable ``strategy_id``
-used by the build cache.
+used by the build cache. SPEC-10 extends the seam with the lockfile's presence
+and content, which the supply-chain guard checks before anything is built.
 """
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Callable
 
@@ -19,18 +19,15 @@ from buildplane.detection.detect import (
     explicit_from_service,
 )
 from buildplane.detection.index import DetectionError, RepositoryIndex
-from buildplane.detection.plan import BuildPlan, PackageManager
+from buildplane.detection.plan import BuildPlan
 from buildplane.pipeline.errors import StrategyError
 from buildplane.pipeline.manifest_resolution import ManifestDocument, select_service
-
-LOCKFILES: dict[PackageManager, str] = {
-    PackageManager.npm: "package-lock.json",
-    PackageManager.pnpm: "pnpm-lock.yaml",
-    PackageManager.yarn: "yarn.lock",
-    PackageManager.bun: "bun.lockb",
-}
-
-_EMPTY_LOCKFILE_HASH = "sha256:" + hashlib.sha256(b"").hexdigest()
+from buildplane.supplychain.lockfiles import (  # noqa: F401 - LOCKFILES re-export
+    EMPTY_LOCKFILE_HASH,
+    LOCKFILES,
+    LockfileInfo,
+    lockfile_info,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +41,9 @@ class ResolvedStrategy:
     strategy_id: str
     lockfile_hash: str
     output_dir: str | None
+    lockfile: LockfileInfo = LockfileInfo(
+        None, False, None, EMPTY_LOCKFILE_HASH
+    )
 
     @property
     def plan(self) -> BuildPlan:
@@ -104,6 +104,7 @@ def resolve_strategy(
     if dockerfile is None and plan.source == "dockerfile":
         dockerfile = explicit.dockerfile if explicit and explicit.dockerfile else "Dockerfile"
 
+    lockfile = lockfile_info(plan, read_file)
     return ResolvedStrategy(
         detection=detection,
         service_name=service_name,
@@ -112,8 +113,9 @@ def resolve_strategy(
         explicit_argv=explicit_argv,
         dockerfile=dockerfile,
         strategy_id=strategy_id(plan),
-        lockfile_hash=lockfile_hash(plan, read_file),
+        lockfile_hash=lockfile.hash,
         output_dir=plan.outputDir,
+        lockfile=lockfile,
     )
 
 
@@ -145,13 +147,4 @@ def lockfile_hash(
     plan: BuildPlan,
     read_file: Callable[[str], bytes | None] | None,
 ) -> str:
-    if plan.packageManager is None or read_file is None:
-        return _EMPTY_LOCKFILE_HASH
-    manager = plan.packageManager
-    if not isinstance(manager, PackageManager):
-        manager = PackageManager(manager)
-    name = LOCKFILES[manager]
-    content = read_file(name)
-    if content is None:
-        return _EMPTY_LOCKFILE_HASH
-    return "sha256:" + hashlib.sha256(content).hexdigest()
+    return lockfile_info(plan, read_file).hash

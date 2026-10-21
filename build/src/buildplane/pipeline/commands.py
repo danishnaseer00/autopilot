@@ -5,6 +5,10 @@ commands (detection's install/build strings) are shell-quoted with
 ``shlex.join`` and executed by the sandbox's own shell, never by the host. The
 manifest's explicit ``command`` stays an argv list here; it is never re-parsed by
 a shell on the host (SPEC-02 R-1).
+
+SPEC-10 makes the install command security-sensitive: every manager receives
+``--ignore-scripts`` and its reproducible-lockfile flag, and only an audited
+package exception produces a separate ``<pm> rebuild <pkg>`` step.
 """
 
 from __future__ import annotations
@@ -13,6 +17,16 @@ import shlex
 from dataclasses import dataclass
 
 from buildplane.detection.plan import BuildPlan, PackageManager
+
+_FROZEN_FLAGS = ("--frozen-lockfile", "--immutable")
+_IGNORE_SCRIPTS = "--ignore-scripts"
+_LOCKFILE_FLAG = {
+    PackageManager.npm: "--frozen-lockfile",
+    PackageManager.pnpm: "--frozen-lockfile",
+    PackageManager.yarn: "--immutable",
+    PackageManager.bun: "--frozen-lockfile",
+}
+_REBUILD_MANAGERS = frozenset({PackageManager.npm, PackageManager.pnpm})
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,26 +38,61 @@ class StrategyCommand:
     uses_shell: bool = False
 
 
+def _manager(plan: BuildPlan) -> PackageManager | None:
+    manager = plan.packageManager
+    if manager is None:
+        return None
+    return manager if isinstance(manager, PackageManager) else PackageManager(manager)
+
+
 def install_argv(
     plan: BuildPlan, *, allow_lifecycle_scripts: bool = False
 ) -> tuple[str, ...] | None:
-    """Add SPEC-09 §7's default ``--ignore-scripts`` to package installation."""
+    """Build the install argv with SPEC-10's default script suppression."""
 
     command = plan.installCommand
     if not command:
         return None
-    argv = shlex.split(command)
+    argv = [
+        argument
+        for argument in shlex.split(command)
+        if argument not in _FROZEN_FLAGS and argument != _IGNORE_SCRIPTS
+    ]
     if not argv:
         return None
-    manager = plan.packageManager
-    if manager is not None and not isinstance(manager, PackageManager):
-        manager = PackageManager(manager)
-    if manager is PackageManager.npm:
-        if "ci" in argv and "--frozen-lockfile" not in argv:
-            argv.append("--frozen-lockfile")
-    if not allow_lifecycle_scripts and "--ignore-scripts" not in argv:
-        argv.append("--ignore-scripts")
+    manager = _manager(plan)
+    if not allow_lifecycle_scripts:
+        argv.append(_IGNORE_SCRIPTS)
+    if manager is not None:
+        # `npm install` still gets the frozen flag here; the pipeline refuses
+        # the no-lockfile case before a sandbox is created.
+        argv.append(_LOCKFILE_FLAG[manager])
     return tuple(argv)
+
+
+def install_script_rebuild_argv(
+    plan: BuildPlan,
+    packages: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    """Run lifecycle scripts only for explicitly approved packages.
+
+    npm and pnpm expose per-package rebuilds. Yarn and Bun do not have a
+    portable equivalent, so the pipeline leaves their scripts disabled and logs
+    that the exception could not be applied rather than enabling all scripts.
+    """
+
+    manager = _manager(plan)
+    if (
+        manager not in _REBUILD_MANAGERS
+        or not plan.installCommand
+        or not packages
+    ):
+        return None
+    return (manager.value, "rebuild", *sorted(set(packages)))
+
+
+def supports_install_script_rebuild(plan: BuildPlan) -> bool:
+    return _manager(plan) in _REBUILD_MANAGERS and bool(plan.installCommand)
 
 
 def build_argv(
@@ -53,6 +102,7 @@ def build_argv(
     dockerfile: str | None = None,
     builder_image: str,
     output_ref: str = "autopilot-build-output:local",
+    allowed_install_scripts: tuple[str, ...] = (),
 ) -> StrategyCommand:
     """Resolve the single argv the sandbox executes."""
 
@@ -98,6 +148,9 @@ def build_argv(
     install = install_argv(plan)
     if install is not None:
         commands.append(install)
+    rebuild = install_script_rebuild_argv(plan, allowed_install_scripts)
+    if rebuild is not None:
+        commands.append(rebuild)
 
     if explicit_argv is not None:
         commands.append(tuple(explicit_argv))

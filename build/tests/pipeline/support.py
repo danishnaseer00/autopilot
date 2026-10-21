@@ -10,6 +10,41 @@ from datetime import datetime, timezone
 from typing import Mapping
 
 from buildplane.pipeline.models import ClaimedJob, SandboxResult
+from buildplane.supplychain.audit import InMemoryAuditLog
+from buildplane.supplychain.controls import SupplyChainControls
+from buildplane.supplychain.denylist import InMemoryDenylist
+from buildplane.supplychain.images import (
+    AuditLogImageScanExceptionStore,
+    ImageScanGate,
+    StaticImageScanner,
+)
+from buildplane.supplychain.install_scripts import InMemoryBuildScriptExceptionStore
+
+
+def make_supply_chain(
+    *,
+    audit_log=None,
+    denylist=None,
+    exceptions=None,
+    scanner=None,
+    provenance=None,
+    clock=None,
+) -> SupplyChainControls:
+    audit = audit_log or InMemoryAuditLog()
+    kwargs = {"clock": clock} if clock is not None else {}
+    gate = ImageScanGate(
+        scanner or StaticImageScanner(),
+        AuditLogImageScanExceptionStore(audit, **kwargs),
+    )
+    return SupplyChainControls(
+        audit_log=audit,
+        denylist=denylist or InMemoryDenylist(),
+        install_script_exceptions=exceptions
+        or InMemoryBuildScriptExceptionStore(audit, **kwargs),
+        image_scan_gate=gate,
+        provenance=provenance,
+        **kwargs,
+    )
 
 
 def sha256_hex(char: str = "a") -> str:

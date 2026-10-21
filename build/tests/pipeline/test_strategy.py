@@ -104,8 +104,8 @@ def test_install_command_gets_ignore_scripts_by_default():
     assert install_argv(plan) == (
         "npm",
         "ci",
-        "--frozen-lockfile",
         "--ignore-scripts",
+        "--frozen-lockfile",
     )
     assert install_argv(plan, allow_lifecycle_scripts=True) == (
         "npm",

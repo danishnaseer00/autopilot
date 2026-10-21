@@ -5,4 +5,4 @@ ownership verification. The pipeline, queue, supply-chain and registry modules
 land in their own spec order; see `paas/build/README.md`.
 """
 
-__all__ = ["detection", "gitware"]
+__all__ = ["detection", "gitware", "pipeline", "supplychain"]

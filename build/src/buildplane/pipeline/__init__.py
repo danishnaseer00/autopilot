@@ -70,14 +70,30 @@ from buildplane.pipeline.sandbox import (
     new_container_name,
     wait_with_watchdog,
 )
-from buildplane.pipeline.service import BuildPipeline
-from buildplane.pipeline.strategy import (
-    ResolvedStrategy,
-    lockfile_hash,
-    resolve_for_manifest,
-    resolve_strategy,
-    strategy_id,
-)
+
+# ``strategy`` imports the supply-chain package, and ``service`` imports both.
+# Keep them lazy so ``buildplane.pipeline.errors`` (used by supply-chain errors)
+# can be imported without initialising the whole pipeline and creating a cycle.
+_LAZY_EXPORTS = {
+    "BuildPipeline": ("buildplane.pipeline.service", "BuildPipeline"),
+    "ResolvedStrategy": ("buildplane.pipeline.strategy", "ResolvedStrategy"),
+    "lockfile_hash": ("buildplane.pipeline.strategy", "lockfile_hash"),
+    "resolve_for_manifest": ("buildplane.pipeline.strategy", "resolve_for_manifest"),
+    "resolve_strategy": ("buildplane.pipeline.strategy", "resolve_strategy"),
+    "strategy_id": ("buildplane.pipeline.strategy", "strategy_id"),
+}
+
+
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module = importlib.import_module(target[0])
+    value = getattr(module, target[1])
+    globals()[name] = value
+    return value
 
 __all__ = [
     "Artifact",

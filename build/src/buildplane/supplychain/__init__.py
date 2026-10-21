@@ -1,0 +1,158 @@
+"""SPEC-10 supply-chain controls.
+
+The package is intentionally split into policy-sized modules: lockfiles,
+install scripts, registry proxy, image scanning, provenance and egress. The
+pipeline composes them through ``SupplyChainControls`` so every build runs the
+same ordering regardless of which adapter is configured.
+"""
+
+from buildplane.supplychain.audit import (
+    AffectedTenant,
+    AsyncpgAuditLog,
+    AuditLog,
+    AuditRecord,
+    InMemoryAuditLog,
+)
+from buildplane.supplychain.controls import SupplyChainControls, SupplyChainPlan
+from buildplane.supplychain.denylist import (
+    Denylist,
+    InMemoryDenylist,
+    JsonFileDenylist,
+)
+from buildplane.supplychain.egress import (
+    EgressDecision,
+    EgressPolicy,
+    EgressRule,
+    record_egress_denial,
+)
+from buildplane.supplychain.errors import (
+    AuditWriteFailed,
+    DenylistedPackage,
+    ImageScanBlocked,
+    ImageScanUnavailable,
+    LockfileMalformed,
+    LockfileMissing,
+    LockfileMutated,
+    RegistryUnavailable,
+    SupplyChainError,
+)
+from buildplane.supplychain.images import (
+    AuditLogImageScanExceptionStore,
+    ImageScanDecision,
+    ImageScanException,
+    ImageScanGate,
+    ImageScanReport,
+    ImageScanner,
+    ScanFinding,
+    Severity,
+    StaticImageScanner,
+    TrivyImageScanner,
+    parse_trivy_report,
+)
+from buildplane.supplychain.install_scripts import (
+    BuildScriptException,
+    BuildScriptExceptionStore,
+    InMemoryBuildScriptExceptionStore,
+    InstallScriptDecision,
+    PostgresBuildScriptExceptionStore,
+    decide_install_scripts,
+    detect_install_scripts,
+)
+from buildplane.supplychain.lockfiles import (
+    EMPTY_LOCKFILE_HASH,
+    LOCKFILES,
+    LockfileInfo,
+    lockfile_info,
+    lockfile_name,
+    lockfile_required,
+    missing_lockfile,
+    parse_locked_packages,
+    verify_lockfile_unchanged,
+)
+from buildplane.supplychain.models import Advisory, LockedPackage, PackageRef
+from buildplane.supplychain.provenance import (
+    ProvenanceReport,
+    ProvenanceResult,
+    ProvenanceStatus,
+    ProvenanceVerifier,
+    StaticProvenanceVerifier,
+    verify_packages,
+)
+from buildplane.supplychain.registry import (
+    InMemoryRegistryCache,
+    RegistryArtifact,
+    RegistryCache,
+    RegistryProxy,
+    RegistryRequest,
+    StaticUpstreamRegistry,
+    UpstreamRegistry,
+)
+
+__all__ = [
+    "Advisory",
+    "AffectedTenant",
+    "AsyncpgAuditLog",
+    "AuditLog",
+    "AuditRecord",
+    "AuditLogImageScanExceptionStore",
+    "AuditWriteFailed",
+    "BuildScriptException",
+    "BuildScriptExceptionStore",
+    "Denylist",
+    "DenylistedPackage",
+    "EMPTY_LOCKFILE_HASH",
+    "EgressDecision",
+    "EgressPolicy",
+    "EgressRule",
+    "ImageScanBlocked",
+    "ImageScanDecision",
+    "ImageScanException",
+    "ImageScanGate",
+    "ImageScanReport",
+    "ImageScanUnavailable",
+    "ImageScanner",
+    "InMemoryAuditLog",
+    "InMemoryBuildScriptExceptionStore",
+    "InMemoryDenylist",
+    "InMemoryRegistryCache",
+    "InstallScriptDecision",
+    "JsonFileDenylist",
+    "LOCKFILES",
+    "LockedPackage",
+    "LockfileInfo",
+    "LockfileMalformed",
+    "LockfileMissing",
+    "LockfileMutated",
+    "PackageRef",
+    "PostgresBuildScriptExceptionStore",
+    "ProvenanceReport",
+    "ProvenanceResult",
+    "ProvenanceStatus",
+    "ProvenanceVerifier",
+    "RegistryArtifact",
+    "RegistryCache",
+    "RegistryProxy",
+    "RegistryRequest",
+    "RegistryUnavailable",
+    "ScanFinding",
+    "Severity",
+    "StaticImageScanner",
+    "StaticProvenanceVerifier",
+    "StaticUpstreamRegistry",
+    "SupplyChainControls",
+    "SupplyChainError",
+    "SupplyChainPlan",
+    "TrivyImageScanner",
+    "UpstreamRegistry",
+    "decide_install_scripts",
+    "detect_install_scripts",
+    "lockfile_info",
+    "lockfile_name",
+    "lockfile_required",
+    "missing_lockfile",
+    "parse_locked_packages",
+    "parse_trivy_report",
+    "record_egress_denial",
+    "verify_lockfile_unchanged",
+    "verify_packages",
+]

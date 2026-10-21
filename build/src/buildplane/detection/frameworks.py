@@ -30,7 +30,7 @@ DEFAULT_PACKAGE_MANAGER = PackageManager.npm
 INSTALL_COMMANDS: dict[PackageManager, str] = {
     PackageManager.npm: "npm ci",
     PackageManager.pnpm: "pnpm install --frozen-lockfile",
-    PackageManager.yarn: "yarn install --frozen-lockfile",
+    PackageManager.yarn: "yarn install --immutable",
     PackageManager.bun: "bun install --frozen-lockfile",
 }
 
