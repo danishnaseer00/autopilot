@@ -21,19 +21,23 @@ from runtime.k8srender.actions import (
     StaticTokenAuthenticator,
     load_action_target,
 )
-from runtime.k8srender.cluster import FakeCluster
+from runtime.k8srender.cluster import FIELD_MANAGER, FakeCluster
 from runtime.k8srender.errors import (
     ApprovalRequired,
     AuthenticationFailed,
     InvalidAction,
+    RolloutTimeout,
     ScaleLimitExceeded,
 )
 from runtime.k8srender.names import (
     DEPLOYMENT_LABEL,
     MANAGED_LABEL,
     PROJECT_LABEL,
+    REVISION_LABEL,
     SERVICE_LABEL,
+    label_value,
 )
+from runtime.lifecycle.models import Deployment
 from runtime.secrets.audit import InMemoryAuditSink
 from runtime.secrets.errors import AuditWriteFailed
 
@@ -43,6 +47,23 @@ DEPLOYMENT_ID = "33333333-3333-3333-3333-333333333333"
 PREVIOUS_ID = "44444444-4444-4444-4444-444444444444"
 NAMESPACE = "autopilot-acme"
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+ROLLBACK_REVISION = "sha256:" + "c" * 64
+ROLLBACK_IMAGE = "registry.platform.internal/autopilot/acme/shop@sha256:" + "d" * 64
+ROLLBACK_MANIFEST = {
+    "version": 1,
+    "name": "shop",
+    "services": [
+        {
+            "name": "web",
+            "source": ".",
+            "type": "node",
+            "runtime": {"port": 3000},
+            "resources": {
+                "requests": {"cpu": "100m", "memory": "128Mi"},
+            },
+        }
+    ],
+}
 
 
 def target(**overrides: object) -> ActionTarget:
@@ -57,9 +78,39 @@ def target(**overrides: object) -> ActionTarget:
         "previous_deployment_id": PREVIOUS_ID,
         "manifest_max_replicas": 5,
         "org_max_replicas": 5,
+        "project_slug": "shop",
+        "environment": "production",
+        "plan_limits": {"max_replicas_per_service": 5},
     }
     values.update(overrides)
     return ActionTarget(**values)  # type: ignore[arg-type]
+
+
+def retained_deployment(**overrides: object) -> Deployment:
+    values: dict[str, object] = {
+        "id": uuid.UUID(PREVIOUS_ID),
+        "org_id": uuid.UUID(ORG_ID),
+        "project_id": uuid.UUID(PROJECT_ID),
+        "git_sha": "a" * 40,
+        "git_ref": "refs/heads/main",
+        "environment": "production",
+        "status": "superseded",
+        "stage": None,
+        "manifest": ROLLBACK_MANIFEST,
+        "manifest_hash": "sha256:" + "e" * 64,
+        "build_image": ROLLBACK_IMAGE,
+        "build_env_keys": (),
+        "revision": ROLLBACK_REVISION,
+        "image_digest": "sha256:" + "d" * 64,
+        "exit_code": 0,
+        "error_message": None,
+        "created_at": NOW,
+        "started_at": NOW,
+        "finished_at": NOW,
+        "superseded_by": uuid.UUID(DEPLOYMENT_ID),
+    }
+    values.update(overrides)
+    return Deployment(**values)  # type: ignore[arg-type]
 
 
 def request(action: str = "scale", **params: object) -> dict:
@@ -100,6 +151,34 @@ class OrderedCluster(FakeCluster):
         super().__init__()
         self.events = events
 
+    async def apply(
+        self,
+        namespace: str,
+        objects,
+        *,
+        field_manager: str = FIELD_MANAGER,
+    ) -> None:
+        self.events.append(("adapter", "apply"))
+        await super().apply(
+            namespace, objects, field_manager=field_manager
+        )
+
+    async def wait_rollout(
+        self,
+        namespace: str,
+        *,
+        kind: str,
+        name: str,
+        timeout_seconds: int = 300,
+    ) -> None:
+        self.events.append(("adapter", "wait_rollout"))
+        await super().wait_rollout(
+            namespace,
+            kind=kind,
+            name=name,
+            timeout_seconds=timeout_seconds,
+        )
+
     async def scale(self, namespace: str, *, kind: str, name: str, replicas: int) -> None:
         self.events.append(("adapter", "scale"))
         await super().scale(namespace, kind=kind, name=name, replicas=replicas)
@@ -112,9 +191,22 @@ class OrderedCluster(FakeCluster):
 
 
 class FakeLifecycle:
-    def __init__(self, events: list[tuple[str, str]] | None = None) -> None:
+    def __init__(
+        self,
+        events: list[tuple[str, str]] | None = None,
+        *,
+        previous: Deployment | None = None,
+    ) -> None:
         self.events = events if events is not None else []
         self.calls: list[dict] = []
+        self.get_calls: list[dict] = []
+        self.previous = previous
+
+    async def get(self, conn, **kwargs):
+        self.events.append(("lifecycle", "get"))
+        self.get_calls.append(kwargs)
+        assert self.previous is not None
+        return self.previous
 
     async def rollback(self, conn, **kwargs):
         self.events.append(("lifecycle", "rollback"))
@@ -438,11 +530,11 @@ def test_restart_deletes_only_the_current_revision_pods() -> None:
     assert events == [("audit", "agent.action.restart_service"), ("adapter", "delete_pods")]
 
 
-def test_rollback_delegates_to_lifecycle_and_never_touches_the_cluster() -> None:
+def test_rollback_reapplies_the_retained_revision_before_the_route_cutover() -> None:
     events: list[tuple[str, str]] = []
     cluster = OrderedCluster(events)
     audit = OrderedAudit(events)
-    lifecycle = FakeLifecycle(events)
+    lifecycle = FakeLifecycle(events, previous=retained_deployment())
     action_service = service(cluster, audit, lifecycle=lifecycle)
 
     import asyncio
@@ -457,7 +549,12 @@ def test_rollback_delegates_to_lifecycle_and_never_touches_the_cluster() -> None
     )
 
     assert result.executed is True
-    assert cluster.calls == []
+    assert result.detail["reapplied"] is True
+    assert result.detail["revision"] == ROLLBACK_REVISION
+    assert result.detail["objects_applied"] > 0
+    assert lifecycle.get_calls == [
+        {"org_id": ORG_ID, "deployment_id": PREVIOUS_ID}
+    ]
     assert lifecycle.calls == [
         {
             "org_id": ORG_ID,
@@ -467,7 +564,52 @@ def test_rollback_delegates_to_lifecycle_and_never_touches_the_cluster() -> None
             "hostnames": None,
         }
     ]
-    assert events == [("audit", "agent.action.rollback"), ("lifecycle", "rollback")]
+    # The adapter changed real workload state: old image, deployment id and
+    # revision labels. A route-only update would leave all three untouched.
+    workload = cluster.get_object("Deployment", NAMESPACE, "shop-web")
+    assert workload is not None
+    template = workload["spec"]["template"]
+    assert template["spec"]["containers"][0]["image"] == ROLLBACK_IMAGE
+    assert template["metadata"]["labels"][DEPLOYMENT_LABEL] == PREVIOUS_ID
+    assert template["metadata"]["labels"][REVISION_LABEL] == label_value(
+        ROLLBACK_REVISION
+    )
+    assert events == [
+        ("audit", "agent.action.rollback"),
+        ("lifecycle", "get"),
+        ("adapter", "apply"),
+        ("adapter", "wait_rollout"),
+        ("lifecycle", "rollback"),
+    ]
+
+
+def test_failed_retained_rollout_does_not_cut_routes() -> None:
+    events: list[tuple[str, str]] = []
+    cluster = OrderedCluster(events)
+    audit = OrderedAudit(events)
+    lifecycle = FakeLifecycle(events, previous=retained_deployment())
+    action_service = service(cluster, audit, lifecycle=lifecycle)
+    cluster.rollout_failures.add((NAMESPACE, "Deployment", "shop-web"))
+
+    import asyncio
+
+    with pytest.raises(RolloutTimeout):
+        asyncio.run(
+            action_service.execute(
+                object(),  # type: ignore[arg-type]
+                credential="token-1",
+                request=request("rollback"),
+                target=target(),
+            )
+        )
+
+    assert lifecycle.calls == []
+    assert events == [
+        ("audit", "agent.action.rollback"),
+        ("lifecycle", "get"),
+        ("adapter", "apply"),
+        ("adapter", "wait_rollout"),
+    ]
 
 
 def test_rollback_without_a_retained_revision_is_rejected() -> None:
@@ -542,6 +684,7 @@ def test_target_resolver_scopes_the_previous_revision_to_the_environment() -> No
                             "name": "web",
                             "type": "node",
                             "runtime": {"port": 3000},
+                            "maxReplicas": 3,
                         }
                     ],
                 },
@@ -569,7 +712,11 @@ def test_target_resolver_scopes_the_previous_revision_to_the_environment() -> No
     )
 
     assert resolved.previous_deployment_id == PREVIOUS_ID
+    assert resolved.manifest_max_replicas == 3
     assert resolved.org_max_replicas == 7
+    assert resolved.project_slug == "shop"
+    assert resolved.environment == "production"
+    assert resolved.plan_limits["max_replicas_per_service"] == 7
     assert connection.previous_args == (
         uuid.UUID(ORG_ID),
         uuid.UUID(PROJECT_ID),

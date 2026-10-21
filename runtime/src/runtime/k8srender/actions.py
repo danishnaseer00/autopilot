@@ -3,8 +3,8 @@
 Three actions, no fourth, no arbitrary patch, no kubeconfig:
 
 * ``restart_service`` - delete the current revision's pods;
-* ``rollback`` - re-promote a previous revision through SPEC-13's single
-  transaction; no build and no image pull;
+* ``rollback`` - re-apply the retained revision, wait for rollout, then cut its
+  routes through SPEC-13's single transaction; no build;
 * ``scale`` - patch replicas within the manifest/org ceiling, approval required.
 
 Every accepted action writes an audit row *before* the cluster or lifecycle call.
@@ -24,6 +24,8 @@ from typing import Any, Callable, Mapping, Protocol
 import asyncpg
 
 from runtime.k8srender.cluster import ClusterAdapter
+from runtime.k8srender.context import RenderContext
+from runtime.k8srender.deploy import DeploymentRuntime
 from runtime.k8srender.errors import (
     ApprovalRequired,
     AuthenticationFailed,
@@ -39,7 +41,7 @@ from runtime.k8srender.names import (
     object_name,
     validate_uuid,
 )
-from runtime.lifecycle.models import PromotionResult
+from runtime.lifecycle.models import Deployment, PromotionResult
 from runtime.lifecycle.service import DeploymentLifecycle
 from runtime.secrets.audit import AuditRecord, AuditSink
 from runtime.secrets.errors import AuditWriteFailed
@@ -209,6 +211,11 @@ class ActionTarget:
     previous_deployment_id: str | None = None
     manifest_max_replicas: int | None = None
     org_max_replicas: int = _SCALE_DEFAULT_MAX
+    # Deployment facts the resolver already read. Rollback needs them to build
+    # the retained revision's RenderContext without a second project lookup.
+    project_slug: str | None = None
+    environment: str = "production"
+    plan_limits: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "org_id", validate_uuid(self.org_id, "org_id"))
@@ -229,6 +236,22 @@ class ActionTarget:
             self, "service", dns_label(self.service, field="service")
         )
         dns_label(self.workload_name, field="workload_name")
+        if self.project_slug is not None:
+            object.__setattr__(
+                self,
+                "project_slug",
+                dns_label(self.project_slug, field="project_slug"),
+            )
+        if not isinstance(self.environment, str) or not self.environment.strip():
+            raise InvalidAction("environment must be a non-empty string")
+        if "\x00" in self.environment:
+            raise InvalidAction("environment must not contain NUL")
+        object.__setattr__(self, "environment", self.environment.strip())
+        if not isinstance(self.plan_limits, Mapping):
+            raise InvalidAction("plan_limits must be a mapping")
+        object.__setattr__(
+            self, "plan_limits", MappingProxyType(dict(self.plan_limits))
+        )
         if self.workload_kind not in {"Deployment", "StatefulSet"}:
             raise InvalidAction("workload_kind must be Deployment or StatefulSet")
         for field_name in ("manifest_max_replicas", "org_max_replicas"):
@@ -311,12 +334,14 @@ class AgentActionService:
         authenticator: AgentAuthenticator,
         audit: AuditSink,
         lifecycle: DeploymentLifecycle | None = None,
+        runtime: DeploymentRuntime | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._adapter = adapter
         self._authenticator = authenticator
         self._audit = audit
         self._lifecycle = lifecycle
+        self._runtime = runtime
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     async def execute(
@@ -404,6 +429,20 @@ class AgentActionService:
             raise InvalidAction("rollback requires the deployment lifecycle service")
         if conn is None:
             raise InvalidAction("rollback requires the caller's tenant transaction")
+
+        # R-19: a route-only move cannot bring back an old revision because
+        # R-13 keeps one workload per service. Fetch the retained immutable
+        # facts, re-apply and wait, and only then perform the route cutover.
+        previous: Deployment = await self._lifecycle.get(
+            conn, org_id=target.org_id, deployment_id=deployment_id
+        )
+        self._validate_retained(previous, target)
+        ctx = self._rollback_context(previous, target)
+        runtime = self._runtime or DeploymentRuntime(
+            self._adapter, lifecycle=self._lifecycle
+        )
+        rendered = await runtime.apply_revision(previous.manifest, ctx)
+
         result: PromotionResult = await self._lifecycle.rollback(
             conn,
             org_id=target.org_id,
@@ -417,6 +456,9 @@ class AgentActionService:
             result.changed,
             {
                 "deployment_id": deployment_id,
+                "revision": ctx.revision,
+                "reapplied": True,
+                "objects_applied": len(rendered.objects),
                 "routes_updated": result.routes_updated,
                 "superseded": [str(item) for item in result.superseded],
             },
@@ -449,6 +491,53 @@ class AgentActionService:
                 "rollback deployment_id does not match the resolved previous revision"
             )
         return previous
+
+    @staticmethod
+    def _validate_retained(previous: Deployment, target: ActionTarget) -> None:
+        if str(previous.project_id) != target.project_id:
+            raise InvalidAction(
+                "retained revision is outside the resolved project"
+            )
+        if str(previous.environment) != target.environment:
+            raise InvalidAction(
+                "retained revision environment does not match the resolved target"
+            )
+        if (
+            previous.status not in {"ready", "live", "superseded"}
+            or not previous.revision
+        ):
+            raise InvalidAction("retained revision is no longer rollbackable")
+        if not isinstance(previous.manifest, Mapping) or not previous.manifest:
+            raise InvalidAction("retained revision has no manifest")
+        if (
+            not isinstance(previous.build_image, str)
+            or not previous.build_image.strip()
+        ):
+            raise InvalidAction("retained revision has no build image")
+
+    @staticmethod
+    def _rollback_context(previous: Deployment, target: ActionTarget) -> RenderContext:
+        if target.project_slug is None:
+            raise InvalidAction(
+                "rollback requires the resolved project slug and plan limits"
+            )
+        assert previous.revision is not None
+        ctx = RenderContext(
+            org_id=target.org_id,
+            project_id=target.project_id,
+            deployment_id=str(previous.id),
+            revision=str(previous.revision),
+            namespace=target.namespace,
+            project_slug=target.project_slug,
+            environment=str(previous.environment),
+            runtime_image=str(previous.build_image),
+            plan_limits=target.plan_limits,
+        )
+        if ctx.object_name(target.service) != target.workload_name:
+            raise InvalidAction(
+                "retained revision does not resolve to the resolved workload"
+            )
+        return ctx
 
     @staticmethod
     def _check_scale(req: ActionRequest, target: ActionTarget) -> None:
@@ -595,6 +684,9 @@ async def load_action_target(
         previous_deployment_id=str(previous) if previous is not None else None,
         manifest_max_replicas=manifest_max,
         org_max_replicas=org_max,
+        project_slug=str(row["project_slug"]),
+        environment=str(row["environment"]),
+        plan_limits=dict(limits),
     )
 
 
@@ -617,15 +709,12 @@ def _manifest_service(manifest: Mapping[str, Any], service: str) -> dict[str, An
 
 
 def _manifest_max_replicas(service: Mapping[str, Any]) -> int | None:
-    # SPEC-06 has no maxReplicas field yet; accept the forward-compatible key if
-    # a resolved manifest carries it, otherwise use the plan ceiling.
-    for key in ("maxReplicas", "max_replicas", "replicas"):
-        value = service.get(key)
-        if isinstance(value, bool) or not isinstance(value, int):
-            continue
-        if value >= 1:
-            return value
-    return None
+    # SPEC-06's optional per-service maxReplicas is the manifest ceiling. When
+    # it is absent, the plan ceiling is the only bound (SPEC-14 R-23).
+    value = service.get("maxReplicas")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 __all__ = [
