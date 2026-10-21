@@ -101,6 +101,9 @@ class ServiceEntry(_Strict):
     image: StrictStr | None = None
     build: BuildBlock | None = None
     runtime: RuntimeBlock
+    # SPEC-14 R-23: agent scaling ceiling for this service. Optional; when
+    # absent the org plan's max_replicas_per_service is the only ceiling.
+    maxReplicas: StrictInt | None = Field(default=None, ge=1)
     dependsOn: list[StrictStr] = Field(default_factory=list)
     healthcheck: HealthcheckBlock | None = None
     # R-8 makes requests mandatory, but via validate.py so the rejection can

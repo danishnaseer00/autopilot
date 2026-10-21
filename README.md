@@ -43,13 +43,14 @@ platform manifests, infrastructure ops). This tree is code only.
 
 ## Status
 
-Phase 0+1 + SPEC-07, SPEC-08, SPEC-18 and SPEC-13 landed. `shared/` (SPEC-06
-manifest + canonical hash), `build/` detection and git integration, `runtime/`
-secrets envelope and deployment lifecycle, `migrations/` (SPEC-03) and
-`tests/contract/` are real. Migration `202610201007` adds the SPEC-08
-persistence tables and SPEC-13's staged deploy inputs. In flight: SPEC-09
-(build pipeline, Worker A) and SPEC-14 (runtime service, Worker B). Cluster E2E
-for SPEC-07/13 and the fresh-volume apply are still owed by the coordinator.
+Phase 0+1 + SPEC-07, SPEC-08, SPEC-18, SPEC-13 and SPEC-14 landed. `shared/`
+(SPEC-06 manifest + canonical hash), `build/` detection and git integration,
+`runtime/` secrets envelope, deployment lifecycle and Kubernetes rendering/
+actions, `migrations/` (SPEC-03) and `tests/contract/` are real. Migration
+`202610201007` adds the SPEC-08 persistence tables and SPEC-13's staged deploy
+inputs. In flight: SPEC-09 (build pipeline, Worker A) and the SPEC-14 rollback
+re-apply + SPEC-15 (Worker B). Cluster E2E for SPEC-07/13/14 and the
+fresh-volume apply are still owed by the coordinator.
 
 ## Fast workflow (every session)
 

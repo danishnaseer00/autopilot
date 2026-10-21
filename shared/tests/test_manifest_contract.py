@@ -234,3 +234,28 @@ def test_build_command_and_output_dir_are_carried():
     assert web.build is not None
     assert web.build.command == ["npm", "run", "build"]
     assert web.build.outputDir == "dist"
+
+
+def test_max_replicas_is_carried_and_hashed():
+    """SPEC-14 R-23 / AC-13: the agent scale ceiling is part of the resolved
+    manifest, so it must survive validation and enter manifest_hash."""
+    document = BASE.replace(
+        "    runtime: { port: 3000 }",
+        "    runtime: { port: 3000 }\n    maxReplicas: 5",
+    )
+    parsed = parse(document)
+    web = parsed.services[0]
+    assert web.maxReplicas == 5
+    dumped = parsed.manifest.model_dump(mode="json", exclude_none=True)
+    assert dumped["services"][0]["maxReplicas"] == 5
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", "1.5", "'5'"])
+def test_max_replicas_must_be_a_positive_integer(value: str):
+    document = BASE.replace(
+        "    runtime: { port: 3000 }",
+        f"    runtime: {{ port: 3000 }}\n    maxReplicas: {value}",
+    )
+    with pytest.raises(ManifestValidationError) as exc:
+        parse(document)
+    assert "maxReplicas" in message(exc.value)
