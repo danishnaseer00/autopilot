@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -57,11 +58,11 @@ _NODE_MAJOR_RE = re.compile(r"(?<!\d)(\d{1,2})(?!\d)")
 class ExplicitBuildConfig:
     """The explicit layer (SPEC-06 manifest / project settings).
 
-    SPEC-06's `BuildBlock` currently carries only `strategy` and `dockerfile`;
-    SPEC-07 R-3 and AC-4 also speak of an explicit `build.command`. That gap is
-    logged as a spec-change proposal in DECISIONS.md. Until SPEC-06 grows the
-    keys, the control plane passes the equivalent values here - never by editing
-    the shared manifest package (SPEC-06 R-15).
+    SPEC-06's `BuildBlock` now carries `command` (argv) and `outputDir` as well
+    as `strategy`/`dockerfile`. `build_argv` keeps the manifest's argv intact so
+    SPEC-09 can pass it to the sandbox as separate arguments; `build_command`
+    remains the string-shaped SPEC-07 contract field for callers that only have
+    a display command.
 
     Commands are data. This module never executes them, and SPEC-09 must pass
     them to the build container as separate argv entries (SPEC-02 R-1).
@@ -72,6 +73,7 @@ class ExplicitBuildConfig:
     package_manager: PackageManager | None = None
     install_command: str | None = None
     build_command: str | None = None
+    build_argv: tuple[str, ...] | None = None
     output_dir: str | None = None
     output_kind: OutputKind | None = None
     node_version: int | None = None
@@ -113,6 +115,18 @@ class ExplicitBuildConfig:
                 raise DetectionError(
                     "invalid_explicit_config", f"{field_name} contains a NUL byte"
                 )
+        if self.build_argv is not None:
+            if not self.build_argv:
+                raise DetectionError(
+                    "invalid_explicit_config",
+                    "build_argv must contain at least one argument",
+                )
+            for argument in self.build_argv:
+                if not isinstance(argument, str) or "\x00" in argument:
+                    raise DetectionError(
+                        "invalid_explicit_config",
+                        "build_argv entries must be strings without NUL bytes",
+                    )
 
 
 @dataclass(frozen=True)
@@ -142,15 +156,21 @@ class DetectionResult:
 def explicit_from_service(service: "ServiceEntry") -> ExplicitBuildConfig | None:
     """Map a resolved manifest service's `build` block onto the explicit layer.
 
-    SPEC-06 `BuildBlock` carries `strategy` and `dockerfile` today. When it grows
-    `command`/`outputDir` (proposal logged in DECISIONS.md), this is the single
-    function that changes - detection never re-implements the manifest model
-    (SPEC-06 R-15).
+    This is the single adapter between SPEC-06's manifest model and SPEC-07's
+    explicit layer; detection never re-implements the manifest model (SPEC-06
+    R-15). The command list is preserved as argv for SPEC-09 rather than joined
+    at this boundary.
     """
     build = service.build
     if build is None:
         return None
-    return ExplicitBuildConfig(strategy=build.strategy, dockerfile=build.dockerfile)
+    command = tuple(build.command) if build.command is not None else None
+    return ExplicitBuildConfig(
+        strategy=build.strategy,
+        dockerfile=build.dockerfile,
+        build_argv=command,
+        output_dir=build.outputDir,
+    )
 
 
 def detect_plan(
@@ -344,6 +364,12 @@ def _apply_explicit(
             values[key] = value
             touched = True
 
+    # SPEC-06's command is argv. Keep the exact argv for SPEC-09 and expose a
+    # safely quoted display form in the string-shaped SPEC-07 contract field.
+    if explicit.build_argv is not None:
+        values["buildCommand"] = shlex.join(explicit.build_argv)
+        touched = True
+
     if explicit.strategy == "dockerfile":
         values["source"] = PlanSource.dockerfile
     elif touched or explicit.strategy in ("none", "buildpack"):
@@ -527,6 +553,9 @@ def explicit_digest(explicit: ExplicitBuildConfig | None) -> str:
             else None,
             "installCommand": explicit.install_command,
             "buildCommand": explicit.build_command,
+            "buildArgv": list(explicit.build_argv)
+            if explicit.build_argv is not None
+            else None,
             "outputDir": explicit.output_dir,
             "outputKind": explicit.output_kind.value if explicit.output_kind else None,
             "nodeVersion": explicit.node_version,
