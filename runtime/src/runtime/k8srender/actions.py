@@ -237,11 +237,14 @@ class ActionTarget:
         )
         dns_label(self.workload_name, field="workload_name")
         if self.project_slug is not None:
-            object.__setattr__(
-                self,
-                "project_slug",
-                dns_label(self.project_slug, field="project_slug"),
-            )
+            # project_token() slugifies and truncates the DB slug, so this is
+            # deliberately not a strict DNS-label check. _rollback_context
+            # proves the resolved object name still matches the target.
+            if not isinstance(self.project_slug, str) or not self.project_slug.strip():
+                raise InvalidAction("project_slug must be a non-empty string")
+            if "\x00" in self.project_slug:
+                raise InvalidAction("project_slug must not contain NUL")
+            object.__setattr__(self, "project_slug", self.project_slug.strip())
         if not isinstance(self.environment, str) or not self.environment.strip():
             raise InvalidAction("environment must be a non-empty string")
         if "\x00" in self.environment:
