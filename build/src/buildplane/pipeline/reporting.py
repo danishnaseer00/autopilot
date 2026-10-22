@@ -18,16 +18,13 @@ import asyncpg
 from platform_shared.manifest import canonical_manifest_json
 
 from buildplane.pipeline.models import BuildOutcome, ClaimedJob
+from buildplane.queue.retry import backoff_seconds, decide_retry, stable_jitter
+
+_RATE_LIMIT_ERROR_CODES = frozenset({"registry_rate_limited", "registry_rate_limit"})
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def backoff_seconds(attempts: int) -> int:
-    """Deterministic exponential backoff; SPEC-11 may add jitter/fairness."""
-
-    return min(300, 5 * (2 ** min(max(attempts, 0), 6)))
 
 
 class BuildReporter(Protocol):
@@ -88,17 +85,38 @@ class PostgresBuildReporter:
         now = self._clock()
         async with self._connection() as conn:
             async with conn.transaction():
-                await conn.execute(
+                deployment_status = await conn.fetchval(
+                    "SELECT status FROM deployments WHERE id = $1 FOR UPDATE",
+                    _uuid(claim.deployment_id),
+                )
+                if deployment_status in {"cancelled", "superseded"}:
+                    # R-17: a late success must not resurrect cancelled work.
+                    await conn.execute(
+                        """
+                        UPDATE build_jobs
+                        SET status = 'cancelled', last_error = 'cancelled',
+                            heartbeat_at = NULL, lease_expires_at = NULL,
+                            updated_at = $1
+                        WHERE id = $2 AND status = 'running'
+                        """,
+                        now,
+                        _uuid(claim.job_id),
+                    )
+                    return
+                result = await conn.execute(
                     """
                     UPDATE build_jobs
                     SET status = 'succeeded', last_error = NULL,
                         heartbeat_at = NULL, lease_expires_at = NULL,
                         updated_at = $1
-                    WHERE id = $2
+                    WHERE id = $2 AND status = 'running'
                     """,
                     now,
                     _uuid(claim.job_id),
                 )
+                if result != "UPDATE 1":
+                    # Another terminal transition won the race.
+                    return
                 # Deliberately not status='ready'. Publish (SPEC-12) fills
                 # revision/image_digest and SPEC-13's gate promotes the row.
                 await conn.execute(
@@ -130,25 +148,92 @@ class PostgresBuildReporter:
         now = self._clock()
         error = (outcome.error or "build failed")[:4000]
         error_code = outcome.error_code or "build_failed"
+        recorded_error = f"{error_code}: {error}"
         async with self._connection() as conn:
             async with conn.transaction():
-                if outcome.retryable:
-                    # Keep it simple and deterministic; SPEC-11 owns jitter.
-                    available = _add_seconds(now, backoff_seconds(claim.attempts))
+                deployment_status = await conn.fetchval(
+                    "SELECT status FROM deployments WHERE id = $1 FOR UPDATE",
+                    _uuid(claim.deployment_id),
+                )
+                if deployment_status in {"cancelled", "superseded"}:
+                    # R-17: cancellation beats retry (and beats a late
+                    # dead-letter transition). Leave the deployment alone; its
+                    # row is already terminal.
                     await conn.execute(
                         """
                         UPDATE build_jobs
-                        SET status = 'pending', attempts = attempts + 1,
+                        SET status = 'cancelled', last_error = 'cancelled',
                             worker_id = NULL, heartbeat_at = NULL,
-                            lease_expires_at = NULL, available_at = $1,
-                            last_error = $2, updated_at = $3
-                        WHERE id = $4 AND status = 'running'
+                            lease_expires_at = NULL, updated_at = $1
+                        WHERE id = $2 AND status IN ('pending', 'running')
                         """,
-                        available,
-                        f"{error_code}: {error}",
                         now,
                         _uuid(claim.job_id),
                     )
+                    return
+
+                decision = decide_retry(
+                    attempts=claim.attempts,
+                    max_attempts=claim.max_attempts,
+                    retryable=outcome.retryable,
+                )
+                if decision.dead_letter:
+                    # R-5: retain the row for inspection instead of silently
+                    # dropping an exhausted job.
+                    result = await conn.execute(
+                        """
+                        UPDATE build_jobs
+                        SET status = 'dead', attempts = $1,
+                            worker_id = NULL, heartbeat_at = NULL,
+                            lease_expires_at = NULL, last_error = $2,
+                            updated_at = $3
+                        WHERE id = $4 AND status = 'running'
+                        """,
+                        decision.next_attempt,
+                        recorded_error,
+                        now,
+                        _uuid(claim.job_id),
+                    )
+                    if result != "UPDATE 1":
+                        # A lease sweep or cancellation already took the job;
+                        # a late failure must not rewrite the deployment.
+                        return
+                    await conn.execute(
+                        """
+                        UPDATE deployments
+                        SET status = 'failed', stage = $1, exit_code = $2,
+                            error_message = $3, log_uri = $4, finished_at = $5
+                        WHERE id = $6 AND status IN ('building', 'queued')
+                        """,
+                        str(outcome.stage),
+                        outcome.exit_code,
+                        error,
+                        outcome.log_uri,
+                        now,
+                        _uuid(claim.deployment_id),
+                    )
+                elif decision.retry:
+                    delay = decision.delay_seconds or 0
+                    if error_code in _RATE_LIMIT_ERROR_CODES:
+                        delay += stable_jitter(claim.job_id)
+                    available = _add_seconds(now, delay)
+                    result = await conn.execute(
+                        """
+                        UPDATE build_jobs
+                        SET status = 'pending', attempts = $1,
+                            worker_id = NULL, heartbeat_at = NULL,
+                            lease_expires_at = NULL, available_at = $2,
+                            last_error = $3, updated_at = $4
+                        WHERE id = $5 AND status = 'running'
+                        """,
+                        decision.next_attempt,
+                        available,
+                        recorded_error,
+                        now,
+                        _uuid(claim.job_id),
+                    )
+                    if result != "UPDATE 1":
+                        return
                     await conn.execute(
                         """
                         UPDATE deployments
@@ -164,16 +249,19 @@ class PostgresBuildReporter:
                         _uuid(claim.deployment_id),
                     )
                 else:
-                    await conn.execute(
+                    result = await conn.execute(
                         """
                         UPDATE build_jobs
-                        SET status = 'failed', last_error = $1, updated_at = $2
+                        SET status = 'failed', worker_id = NULL,
+                            last_error = $1, updated_at = $2
                         WHERE id = $3 AND status = 'running'
                         """,
-                        f"{error_code}: {error}",
+                        recorded_error,
                         now,
                         _uuid(claim.job_id),
                     )
+                    if result != "UPDATE 1":
+                        return
                     await conn.execute(
                         """
                         UPDATE deployments

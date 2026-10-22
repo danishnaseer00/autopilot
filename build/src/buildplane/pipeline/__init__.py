@@ -52,7 +52,6 @@ from buildplane.pipeline.models import (
     SecretProvider,
     Stage,
 )
-from buildplane.pipeline.queue import PostgresJobQueue
 from buildplane.pipeline.reporting import (
     BuildReporter,
     InMemoryBuildReporter,
@@ -76,6 +75,7 @@ from buildplane.pipeline.sandbox import (
 # can be imported without initialising the whole pipeline and creating a cycle.
 _LAZY_EXPORTS = {
     "BuildPipeline": ("buildplane.pipeline.service", "BuildPipeline"),
+    "PostgresJobQueue": ("buildplane.pipeline.queue", "PostgresJobQueue"),
     "ResolvedStrategy": ("buildplane.pipeline.strategy", "ResolvedStrategy"),
     "lockfile_hash": ("buildplane.pipeline.strategy", "lockfile_hash"),
     "resolve_for_manifest": ("buildplane.pipeline.strategy", "resolve_for_manifest"),
