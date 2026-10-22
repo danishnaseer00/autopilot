@@ -104,6 +104,24 @@ class ImageScanBlocked(SupplyChainError):
         self.findings = findings
 
 
+class BaseImageNotPinned(SupplyChainError):
+    def __init__(self, filename: str, line: int, reference: str) -> None:
+        if reference == "<missing>":
+            detail = "has no image reference"
+        else:
+            detail = f"references {reference!r} by tag"
+        super().__init__(
+            f"{filename}:{line} {detail}; every Dockerfile FROM must be "
+            "pinned by sha256 digest (SPEC-12 R-12)",
+            stage="build",
+            retryable=False,
+            code="base_image_not_pinned",
+        )
+        self.filename = filename
+        self.line = line
+        self.reference = reference
+
+
 class ImageScanUnavailable(SupplyChainError):
     def __init__(self, message: str) -> None:
         super().__init__(

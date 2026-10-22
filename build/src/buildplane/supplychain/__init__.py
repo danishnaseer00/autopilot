@@ -13,6 +13,7 @@ from buildplane.supplychain.audit import (
     AuditRecord,
     InMemoryAuditLog,
 )
+from buildplane.supplychain.base_images import BaseImage, parse_base_images
 from buildplane.supplychain.controls import SupplyChainControls, SupplyChainPlan
 from buildplane.supplychain.denylist import (
     Denylist,
@@ -27,6 +28,7 @@ from buildplane.supplychain.egress import (
 )
 from buildplane.supplychain.errors import (
     AuditWriteFailed,
+    BaseImageNotPinned,
     DenylistedPackage,
     ImageScanBlocked,
     ImageScanUnavailable,
@@ -96,6 +98,8 @@ __all__ = [
     "AuditRecord",
     "AuditLogImageScanExceptionStore",
     "AuditWriteFailed",
+    "BaseImage",
+    "BaseImageNotPinned",
     "BuildScriptException",
     "BuildScriptExceptionStore",
     "Denylist",
@@ -150,6 +154,7 @@ __all__ = [
     "lockfile_name",
     "lockfile_required",
     "missing_lockfile",
+    "parse_base_images",
     "parse_locked_packages",
     "parse_trivy_report",
     "record_egress_denial",

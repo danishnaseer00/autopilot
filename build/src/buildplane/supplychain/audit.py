@@ -33,6 +33,8 @@ ACTION_IMAGE_SCAN_EXCEPTION_USED = "image.scan_exception_used"
 ACTION_REGISTRY_PULL = "registry.pull"
 ACTION_REGISTRY_DENIED = "registry.denied"
 ACTION_REGISTRY_FAILOVER = "registry.failover"
+ACTION_IMAGE_PUSHED = "image.pushed"
+ACTION_IMAGE_DIGEST_MISMATCH = "image.digest_mismatch"
 ACTION_EGRESS_DENIED = "build.egress_denied"
 ACTION_PROVENANCE = "build.provenance"
 

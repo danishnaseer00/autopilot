@@ -33,6 +33,7 @@ from buildplane.supplychain.audit import (
     AuditLog,
     AuditRecord,
 )
+from buildplane.supplychain.base_images import parse_base_images
 from buildplane.supplychain.denylist import Denylist
 from buildplane.supplychain.errors import DenylistedPackage, SupplyChainError
 from buildplane.supplychain.images import ImageScanDecision, ImageScanGate
@@ -69,6 +70,7 @@ class SupplyChainPlan:
     notices: tuple[str, ...]
     warnings: tuple[str, ...]
     image_scan: ImageScanDecision | None = None
+    base_image_scans: tuple[ImageScanDecision, ...] = ()
 
     @property
     def cache_component(self) -> str | None:
@@ -138,38 +140,41 @@ class SupplyChainControls:
         notices.extend(script_notices)
         warnings.extend(script_warnings)
 
-        image_decision = await self.image_scan_gate.check(
+        image_decision = await self._scan_image(
+            claim,
             image=build_image,
-            org_id=claim.org_id,
             at=at,
+            label="builder",
+            notices=notices,
+            warnings=warnings,
         )
-        if image_decision.exception is not None:
-            exception = image_decision.exception
-            warnings.append(
-                f"image scan findings accepted by audited exception until "
-                f"{exception.expires_at.isoformat()}"
-            )
-            await self._write(
-                AuditRecord(
-                    action=ACTION_IMAGE_SCAN_EXCEPTION_USED,
-                    actor_type="system",
-                    actor_id="build-plane",
-                    org_id=claim.org_id,
-                    target_type="image",
-                    target_id=build_image,
-                    metadata={
-                        "image": build_image,
-                        "job_id": claim.job_id,
-                        "project_id": claim.project_id,
-                        "expires_at": exception.expires_at.isoformat(),
-                    },
+
+        base_image_scans: list[ImageScanDecision] = []
+        scanned = {build_image: image_decision}
+        if strategy.dockerfile is not None:
+            content = read_file(strategy.dockerfile)
+            if content is None:
+                raise SupplyChainError(
+                    f"{strategy.dockerfile} is missing from the build context",
+                    stage="build",
+                    code="dockerfile_missing",
                 )
-            )
-        elif image_decision.report.findings:
-            notices.append(
-                f"image scan reported {len(image_decision.report.findings)} "
-                f"finding(s) below the block threshold"
-            )
+            for base in parse_base_images(
+                content, filename=strategy.dockerfile
+            ):
+                if base.reference in scanned:
+                    base_image_scans.append(scanned[base.reference])
+                    continue
+                decision = await self._scan_image(
+                    claim,
+                    image=base.reference,
+                    at=at,
+                    label=f"base image from {strategy.dockerfile}:{base.line}",
+                    notices=notices,
+                    warnings=warnings,
+                )
+                scanned[base.reference] = decision
+                base_image_scans.append(decision)
 
         await self._lockfile_history(claim, info, at, warnings)
         await self._provenance(claim, packages, notices, warnings)
@@ -180,7 +185,52 @@ class SupplyChainControls:
             notices=tuple(notices),
             warnings=tuple(warnings),
             image_scan=image_decision,
+            base_image_scans=tuple(base_image_scans),
         )
+
+    async def _scan_image(
+        self,
+        claim: ClaimedJob,
+        *,
+        image: str,
+        at: datetime,
+        label: str,
+        notices: list[str],
+        warnings: list[str],
+    ) -> ImageScanDecision:
+        decision = await self.image_scan_gate.check(
+            image=image,
+            org_id=claim.org_id,
+            at=at,
+        )
+        if decision.exception is not None:
+            exception = decision.exception
+            warnings.append(
+                f"{label} scan findings accepted by audited exception until "
+                f"{exception.expires_at.isoformat()}"
+            )
+            await self._write(
+                AuditRecord(
+                    action=ACTION_IMAGE_SCAN_EXCEPTION_USED,
+                    actor_type="system",
+                    actor_id="build-plane",
+                    org_id=claim.org_id,
+                    target_type="image",
+                    target_id=image,
+                    metadata={
+                        "image": image,
+                        "job_id": claim.job_id,
+                        "project_id": claim.project_id,
+                        "expires_at": exception.expires_at.isoformat(),
+                    },
+                )
+            )
+        elif decision.report.findings:
+            notices.append(
+                f"{label} scan reported {len(decision.report.findings)} "
+                f"finding(s) below the block threshold"
+            )
+        return decision
 
     def post_build(
         self,
