@@ -54,8 +54,8 @@ the routing table/edge config and rate limiter, `migrations/` (SPEC-03) and
 persistence tables, SPEC-13 staged deploy inputs, SPEC-09 reproducibility
 columns, the SPEC-10 org/RLS fix for `build_script_exceptions` and the SPEC-15
 ingress/TLS ledger. Worker A's build specs (07-12) and Worker B's runtime specs
-(18, 13-16) are complete locally. Cluster E2E and the fresh-volume apply (now
-through `1011`) are still owed by the coordinator.
+(18, 13-16) are complete locally. The fresh-volume apply (`1000`–`1011`) is
+verified on an isolated cluster; cluster E2E is still owed by the coordinator.
 
 ## Fast workflow (every session)
 
