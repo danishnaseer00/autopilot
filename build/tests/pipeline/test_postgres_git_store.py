@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -18,6 +19,12 @@ from buildplane.gitware.models import (
     WebhookEventRecord,
 )
 from buildplane.gitware.postgres_store import PostgresGitStore
+from buildplane.queue.admission import (
+    PostgresQueueAdmission,
+    QueueAdmissionPolicy,
+)
+from buildplane.queue.errors import QueueFull, QueueUnavailable
+from buildplane.queue.reconcile import PostgresQueueReconciler
 
 DSN = os.environ.get("DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not DSN, reason="DATABASE_URL not configured")
@@ -199,6 +206,10 @@ def test_record_intent_is_idempotent_and_supersedes_queued_work():
             )
             assert duplicate.created is False
             assert duplicate.deployment_id == first.deployment_id
+            assert await conn.fetchval(
+                "SELECT count(*) FROM deployments WHERE project_id = $1",
+                project_id,
+            ) == 1
 
             deployment = await conn.fetchrow(
                 "SELECT status, build_env_keys, manifest, build_image "
@@ -237,6 +248,106 @@ def test_record_intent_is_idempotent_and_supersedes_queued_work():
                 uuid.UUID(first.deployment_id),
             )
             assert old_job["status"] == "cancelled"
+        finally:
+            if org_id is not None:
+                await _cleanup(conn, org_id, prefix)
+            await conn.close()
+
+    asyncio.run(scenario())
+
+
+def test_enqueue_backpressure_is_fast_and_paid_plan_gets_a_position():
+    async def scenario():
+        conn = await asyncpg.connect(DSN)
+        org_id = None
+        prefix = f"test-delivery-{uuid.uuid4().hex}"
+        try:
+            org_id, project_id = await _setup(conn)
+            admission = PostgresQueueAdmission(
+                policy=QueueAdmissionPolicy(max_queue_depth=0)
+            )
+            store = PostgresGitStore(conn, admission=admission)
+
+            started = time.perf_counter()
+            with pytest.raises(QueueFull):
+                await store.record_intent(
+                    _intent(
+                        project_id,
+                        org_id,
+                        sha="d" * 40,
+                        delivery_id=f"{prefix}-full",
+                    ),
+                    received_at=NOW,
+                )
+            elapsed = time.perf_counter() - started
+            # AC-4: the webhook's enqueue path must not block on capacity.
+            assert elapsed < 0.2
+
+            # The rejection is transactional: no queued deployment survives.
+            queued = await conn.fetchval(
+                "SELECT count(*) FROM deployments WHERE project_id = $1",
+                project_id,
+            )
+            assert queued == 0
+
+            await conn.execute(
+                "UPDATE orgs SET plan_id = (SELECT id FROM plans WHERE code = 'pro') "
+                "WHERE id = $1",
+                org_id,
+            )
+            accepted = await store.record_intent(
+                _intent(
+                    project_id,
+                    org_id,
+                    sha="e" * 40,
+                    delivery_id=f"{prefix}-paid",
+                ),
+                received_at=NOW,
+            )
+            assert accepted.created is True
+            assert accepted.queue_position is not None
+            assert accepted.queue_position >= 0
+        finally:
+            if org_id is not None:
+                await _cleanup(conn, org_id, prefix)
+            await conn.close()
+
+    asyncio.run(scenario())
+
+
+def test_redis_admission_failure_rolls_back_and_leaves_no_orphan():
+    async def scenario():
+        conn = await asyncpg.connect(DSN)
+        org_id = None
+        prefix = f"test-delivery-{uuid.uuid4().hex}"
+        try:
+            org_id, project_id = await _setup(conn)
+
+            class _FailingLimiter:
+                async def allow(self, _org_id, *, now):
+                    raise ConnectionError("redis is down")
+
+            admission = PostgresQueueAdmission(limiter=_FailingLimiter())
+            store = PostgresGitStore(conn, admission=admission)
+            with pytest.raises(QueueUnavailable):
+                await store.record_intent(
+                    _intent(
+                        project_id,
+                        org_id,
+                        sha="f" * 40,
+                        delivery_id=f"{prefix}-redis-down",
+                    ),
+                    received_at=NOW,
+                )
+
+            assert await conn.fetchval(
+                "SELECT count(*) FROM deployments WHERE project_id = $1",
+                project_id,
+            ) == 0
+            reconciler = PostgresQueueReconciler(conn, clock=lambda: NOW)
+            assert await reconciler.reconcile(
+                now=NOW, org_id=str(org_id)
+            ) == ()
         finally:
             if org_id is not None:
                 await _cleanup(conn, org_id, prefix)

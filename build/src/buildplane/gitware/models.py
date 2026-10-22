@@ -207,6 +207,7 @@ class RecordResult:
     deployment_id: str
     created: bool
     superseded: tuple[str, ...] = ()
+    queue_position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

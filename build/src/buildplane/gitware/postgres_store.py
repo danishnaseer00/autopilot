@@ -34,14 +34,25 @@ from buildplane.gitware.models import (
     WebhookEventRecord,
 )
 from buildplane.gitware.store import GitStore
+from buildplane.queue.admission import PostgresQueueAdmission
+from buildplane.queue.errors import QuotaExceeded, QueueFull
 
 _TXT = "txt"
 _BRANCH = "branch"
 
 
 class PostgresGitStore(GitStore):
-    def __init__(self, database) -> None:
+    def __init__(
+        self,
+        database,
+        *,
+        admission: PostgresQueueAdmission | None = None,
+    ) -> None:
         self._db = database
+        # SPEC-11 R-6/R-8: the webhook's enqueue must be the place that pushes
+        # back. The default policy is deliberately generous; deployment
+        # config injects the real MAX_QUEUE_DEPTH.
+        self._admission = admission or PostgresQueueAdmission()
 
     @asynccontextmanager
     async def _connection(self) -> AsyncIterator[asyncpg.Connection]:
@@ -202,6 +213,20 @@ class PostgresGitStore(GitStore):
                 if existing is not None:
                     return RecordResult(str(existing), created=False)
 
+                decision = await self._admission.admit(
+                    conn, org_id=org_uuid, now=received_at
+                )
+                if not decision.accepted:
+                    if decision.error == "build_quota_exceeded":
+                        raise QuotaExceeded(
+                            retry_after_seconds=decision.retry_after_seconds
+                            or 60
+                        )
+                    raise QueueFull(
+                        retry_after_seconds=decision.retry_after_seconds
+                        or 5
+                    )
+
                 deployment_id = uuid.uuid4()
                 await conn.execute(
                     """
@@ -274,7 +299,10 @@ class PostgresGitStore(GitStore):
                         [uuid.UUID(value) for value in replaced],
                     )
                 return RecordResult(
-                    str(deployment_id), created=True, superseded=replaced
+                    str(deployment_id),
+                    created=True,
+                    superseded=replaced,
+                    queue_position=decision.position,
                 )
 
     async def record_event(self, record: WebhookEventRecord) -> None:

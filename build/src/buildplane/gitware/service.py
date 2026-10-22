@@ -44,6 +44,7 @@ from buildplane.gitware.ratelimit import (
     InMemoryRateLimiter,
     WebhookRateLimiter,
 )
+from buildplane.queue.errors import QueueBackpressure
 from buildplane.gitware.routing import (
     build_pull_request_intent,
     build_push_intent,
@@ -210,6 +211,24 @@ class WebhookService:
                 event_type=event_type,
                 delivery_id=delivery_id,
                 now=self._now(),
+            )
+        except QueueBackpressure as exc:
+            # R-6: a deliberate backpressure decision is a domain outcome, not
+            # an infrastructure failure. Release the delivery so a later retry
+            # can enqueue once capacity returns; return quickly either way.
+            try:
+                await self._store.release_delivery(delivery_id)
+            except Exception:  # pragma: no cover - best effort
+                self._logger.warning(
+                    "could not release backpressured delivery=%s",
+                    delivery_id,
+                    exc_info=True,
+                )
+            return WebhookOutcome(
+                status_code=exc.status_code,
+                action="queue_full",
+                error=exc.code,
+                detail={"retry_after_seconds": str(exc.retry_after_seconds)},
             )
         except Exception:
             # Let GitHub retry, but do not turn the delivery into a permanent
@@ -398,8 +417,16 @@ class WebhookService:
             git_sha=event.after,
             deployment_id=result.deployment_id,
         )
+        detail = (
+            {"queue_position": str(result.queue_position)}
+            if result.queue_position is not None
+            else {}
+        )
         return WebhookOutcome(
-            202, outcome_name, deployment_id=result.deployment_id
+            202,
+            outcome_name,
+            deployment_id=result.deployment_id,
+            detail=detail,
         )
 
     async def _handle_pull_request(
@@ -463,8 +490,16 @@ class WebhookService:
             git_sha=event.head_sha,
             deployment_id=result.deployment_id,
         )
+        detail = (
+            {"queue_position": str(result.queue_position)}
+            if result.queue_position is not None
+            else {}
+        )
         return WebhookOutcome(
-            202, outcome_name, deployment_id=result.deployment_id
+            202,
+            outcome_name,
+            deployment_id=result.deployment_id,
+            detail=detail,
         )
 
     async def _handle_repository(

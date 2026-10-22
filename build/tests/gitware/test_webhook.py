@@ -18,11 +18,38 @@ from buildplane.gitware import (
     VerificationMethod,
 )
 from buildplane.gitware.errors import DeploymentBlocked
+from buildplane.queue.errors import QueueFull
 
 
 def _delivery(handle, signed, service, payload, *, event="push", delivery_id):
     raw, headers = signed(payload, event=event, delivery_id=delivery_id)
     return handle(service, raw, headers)
+
+
+def test_queue_backpressure_returns_429_without_claiming_permanent_failure(
+    store, make_project, make_service, make_push_payload, signed, handle
+):
+    """AC-4: full capacity is a fast domain outcome, not a 60-second stall."""
+
+    store.add_project(make_project())
+    service = make_service()
+
+    async def reject(*_args, **_kwargs):
+        raise QueueFull()
+
+    store.record_intent = reject
+    outcome = _delivery(
+        handle,
+        signed,
+        service,
+        make_push_payload(),
+        delivery_id="backpressure-1",
+    )
+    assert outcome.status_code == 429
+    assert outcome.action == "queue_full"
+    assert outcome.error == "build_queue_full"
+    # The delivery was released, so GitHub's retry is not treated as a duplicate.
+    assert asyncio.run(store.claim_delivery("backpressure-1")) is True
 
 
 def test_triple_push_leaves_one_live_deployment_newest_sha(
