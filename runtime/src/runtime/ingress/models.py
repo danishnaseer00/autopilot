@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
 from runtime.ingress.errors import InvalidRoute
 from runtime.ingress.validation import (
@@ -18,7 +19,12 @@ from runtime.ingress.validation import (
 ROUTE_KINDS = frozenset({"proxy", "static", "redirect", "rewrite", "notfound"})
 DOMAIN_STATUSES = frozenset({"pending", "verified", "active", "failed", "suspended"})
 CERTIFICATE_STATUSES = frozenset({"pending", "issued", "failed", "revoked"})
-RESOLUTION_ACTIONS = frozenset({"proxy", "static", "redirect", "notfound", "error"})
+# ``ratelimited`` is produced by SPEC-16's data-plane facade before route
+# resolution.  Keeping it in the shared result type means callers do not need a
+# union of two nearly identical response objects.
+RESOLUTION_ACTIONS = frozenset(
+    {"proxy", "static", "redirect", "notfound", "error", "ratelimited"}
+)
 
 
 @dataclass(frozen=True)
@@ -360,6 +366,7 @@ def new_id() -> str:
 __all__ = [
     "CERTIFICATE_STATUSES",
     "DOMAIN_STATUSES",
+    "ROUTE_KINDS",
     "CertificateAlert",
     "CertificateRecord",
     "DomainOnboarding",
@@ -368,7 +375,6 @@ __all__ = [
     "IssuedCertificate",
     "NotFoundResponse",
     "OutboxMessage",
-    "ROUTE_KINDS",
     "ReconcileResult",
     "Resolution",
     "RouteRule",

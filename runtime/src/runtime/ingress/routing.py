@@ -17,7 +17,7 @@ Evaluation order is load-bearing:
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 from runtime.ingress.errors import RewriteDepthExceeded
 from runtime.ingress.models import NotFoundResponse, Resolution, RouteRule
@@ -142,8 +142,47 @@ def resolve_request(
     """
 
     host = canonical_hostname(hostname)
+    candidates = tuple(route for route in routes if match_host(route.hostname, host))
+    return _resolve_candidates(
+        candidates,
+        host=host,
+        path=path,
+        max_rewrites=max_rewrites,
+    )
+
+
+def resolve_prefiltered(
+    candidates: Iterable[RouteRule],
+    *,
+    hostname: str,
+    path: str,
+    max_rewrites: int = MAX_REWRITE_DEPTH,
+) -> Resolution:
+    """Resolve against rows already matched to one canonical hostname.
+
+    This is the indexed-table fast path.  ``hostname`` must already be canonical
+    and every candidate must already match it; callers that have a flat route
+    list should use :func:`resolve_request` instead.  Path selection and the
+    rewrite/redirect semantics are still shared with the general resolver.
+    """
+
+    return _resolve_candidates(
+        candidates,
+        host=hostname,
+        path=path,
+        max_rewrites=max_rewrites,
+    )
+
+
+def _resolve_candidates(
+    candidates: Iterable[RouteRule],
+    *,
+    host: str,
+    path: str,
+    max_rewrites: int,
+) -> Resolution:
     current = validate_path(path)
-    table = tuple(routes)
+    table = tuple(candidates)
     visited: set[tuple[str, str]] = set()
     depth = 0
 
@@ -166,13 +205,9 @@ def resolve_request(
             )
         visited.add(key)
 
-        candidates = [
-            route
-            for route in table
-            if match_host(route.hostname, host) and match_path(route.path_prefix, current)
-        ]
+        matching = [route for route in table if match_path(route.path_prefix, current)]
 
-        redirects = [route for route in candidates if route.kind == "redirect"]
+        redirects = [route for route in matching if route.kind == "redirect"]
         if redirects:
             chosen = _select(redirects, hostname=host, path=current)
             return Resolution(
@@ -185,7 +220,7 @@ def resolve_request(
                 rewrite_depth=depth,
             )
 
-        rewrites = [route for route in candidates if route.kind == "rewrite"]
+        rewrites = [route for route in matching if route.kind == "rewrite"]
         if rewrites:
             chosen = _select(rewrites, hostname=host, path=current)
             if depth >= max_rewrites:
@@ -226,9 +261,7 @@ def resolve_request(
             continue
 
         terminals = [
-            route
-            for route in candidates
-            if route.kind in {"proxy", "static", "notfound"}
+            route for route in matching if route.kind in {"proxy", "static", "notfound"}
         ]
         if not terminals:
             not_found = designed_not_found()
@@ -286,5 +319,6 @@ __all__ = [
     "match_host",
     "match_path",
     "resolve_or_error",
+    "resolve_prefiltered",
     "resolve_request",
 ]
