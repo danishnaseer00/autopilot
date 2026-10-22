@@ -43,18 +43,18 @@ platform manifests, infrastructure ops). This tree is code only.
 
 ## Status
 
-Phase 0+1 + SPEC-07, SPEC-08, SPEC-18, SPEC-13, SPEC-14, SPEC-09, SPEC-10 and
-SPEC-15 landed. `shared/` (SPEC-06 manifest + canonical hash), `build/`
-detection, git integration, the build pipeline and supply-chain controls,
-`runtime/` secrets envelope, deployment lifecycle, Kubernetes
-rendering/actions and the ingress/TLS certificate ledger + reconciler,
-`migrations/` (SPEC-03) and `tests/contract/` are real. Migrations
-`202610201007`-`1011` carry the SPEC-08 persistence tables, SPEC-13 staged
-deploy inputs, SPEC-09 reproducibility columns, the SPEC-10 org/RLS fix for
-`build_script_exceptions` and the SPEC-15 ingress/TLS ledger. In flight:
-SPEC-11 (build plane, Worker A) and SPEC-16 (runtime plane, Worker B). Cluster
-E2E and the fresh-volume apply (now through `1011`) are still owed by the
-coordinator.
+Phase 0+1 + SPEC-07, SPEC-08, SPEC-18, SPEC-13, SPEC-14, SPEC-09, SPEC-10,
+SPEC-15 and SPEC-11 landed. `shared/` (SPEC-06 manifest + canonical hash),
+`build/` detection, git integration, the build pipeline, queue
+fairness/backpressure and supply-chain controls, `runtime/` secrets envelope,
+deployment lifecycle, Kubernetes rendering/actions and the ingress/TLS
+certificate ledger + reconciler, `migrations/` (SPEC-03) and `tests/contract/`
+are real. Migrations `202610201007`-`1011` carry the SPEC-08 persistence
+tables, SPEC-13 staged deploy inputs, SPEC-09 reproducibility columns, the
+SPEC-10 org/RLS fix for `build_script_exceptions` and the SPEC-15 ingress/TLS
+ledger. In flight: SPEC-12 (build plane, Worker A) and SPEC-16 (runtime plane,
+Worker B). Cluster E2E and the fresh-volume apply (now through `1011`) are
+still owed by the coordinator.
 
 ## Fast workflow (every session)
 
