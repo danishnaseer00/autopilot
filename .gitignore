@@ -1,0 +1,24 @@
+# --- local secrets / env ---
+.env
+.env.*
+!.env.example
+*.key
+
+# --- local development artifacts ---
+.local/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# --- node console ---
+node_modules/
+dist/
+
+# --- editor noise ---
+.vscode/
+.idea/
+*.swp
