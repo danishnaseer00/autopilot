@@ -10,6 +10,7 @@ A self-hosted platform-as-a-service with an incident-diagnosis research plane.</
   <img alt="Runtime: k3d / k3s" src="https://img.shields.io/badge/runtime-k3d%20%2F%20k3s-326CE5?style=for-the-badge&amp;logo=kubernetes&amp;logoColor=white" />
   <img alt="Cloud: AWS planned" src="https://img.shields.io/badge/cloud-AWS%20planned-FF9900?style=for-the-badge" />
   <img alt="Tests: local suite passing" src="https://img.shields.io/badge/tests-local%20suite%20passing-0f766e?style=for-the-badge" />
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge" />
 </p>
 
 <p>
@@ -44,6 +45,7 @@ The current milestone is a working **local vertical slice on k3d**. The same app
 - [API](#api)
 - [Autopilot research plane](#autopilot-research-plane)
 - [Roadmap](#roadmap)
+- [License](#license)
 - [Contributing](#contributing)
 
 ## Overview
@@ -127,6 +129,7 @@ This directory is the repository root when published. Paths below are relative t
 
 ```text
 .
+├── LICENSE               MIT license
 ├── autopilot/            Autopilot research plane (offline fault-injection core)
 ├── build/                Build worker: detection, pipeline, queue, supply chain, registry
 ├── console/              React + Vite operations console
@@ -363,6 +366,12 @@ The live cluster adapter, fault-injection loop, and model evaluation pipeline ar
 - [ ] Replace the billing, reports, and admin shells with production implementations.
 - [ ] Add continuous integration for the Python suite, console typecheck, lint, tests, and production build.
 
+## License
+
+Released under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Danish Naseer.
+
 ## Contributing
 
 1. Create a branch for the change.
@@ -373,5 +382,5 @@ The live cluster adapter, fault-injection loop, and model evaluation pipeline ar
 Do not commit credentials, `.env` files, master keys, or generated local artifacts.
 
 <div align="center">
-  <sub>AutoPilot · FastAPI · React · PostgreSQL · Kubernetes</sub>
+  <sub>AutoPilot · MIT licensed · FastAPI · React · PostgreSQL · Kubernetes</sub>
 </div>
