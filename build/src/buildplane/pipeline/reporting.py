@@ -117,8 +117,10 @@ class PostgresBuildReporter:
                 if result != "UPDATE 1":
                     # Another terminal transition won the race.
                     return
-                # Deliberately not status='ready'. Publish (SPEC-12) fills
-                # revision/image_digest and SPEC-13's gate promotes the row.
+                # A build-only success stays at stage=built and is not ready:
+                # SPEC-12 publication is the step that supplies the digest.
+                # When a publisher ran, the row becomes ready atomically with
+                # the image record, and SPEC-13's runtime gate may deploy it.
                 await conn.execute(
                     """
                     UPDATE deployments
@@ -126,21 +128,56 @@ class PostgresBuildReporter:
                         manifest_hash = $2,
                         build_image = $3,
                         build_env_keys = $4,
-                        stage = 'built',
+                        stage = CASE
+                            WHEN $6::text IS NOT NULL AND $7::text IS NOT NULL
+                            THEN 'pushed' ELSE 'built'
+                        END,
+                        status = CASE
+                            WHEN $6::text IS NOT NULL AND $7::text IS NOT NULL
+                            THEN 'ready'::deployment_status ELSE status
+                        END,
+                        revision = COALESCE($6, revision),
+                        image_digest = COALESCE($7, image_digest),
                         exit_code = 0,
                         error_message = NULL,
                         log_uri = $5,
-                        node_version = $6
-                    WHERE id = $7 AND status = 'building'
+                        node_version = $8
+                    WHERE id = $9 AND status = 'building'
                     """,
                     manifest_json,
                     outcome.manifest_hash,
                     outcome.build_image,
                     list(claim.build_env_keys),
                     outcome.log_uri,
+                    outcome.revision,
+                    outcome.image_digest,
                     outcome.node_version,
                     _uuid(claim.deployment_id),
                 )
+                if (
+                    outcome.revision is not None
+                    and outcome.image_digest is not None
+                    and outcome.image_registry is not None
+                    and outcome.image_repository is not None
+                ):
+                    await conn.execute(
+                        """
+                        INSERT INTO images
+                            (org_id, project_id, deployment_id, tag, digest,
+                             registry, size_bytes, build_image_digest, manifest_hash)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        ON CONFLICT (digest) DO NOTHING
+                        """,
+                        _uuid(claim.org_id),
+                        _uuid(claim.project_id),
+                        _uuid(claim.deployment_id),
+                        outcome.revision,
+                        outcome.image_digest,
+                        outcome.image_registry,
+                        int(outcome.image_size_bytes or 0),
+                        _builder_digest(outcome.build_image),
+                        outcome.manifest_hash,
+                    )
 
     async def report_failure(
         self, claim: ClaimedJob, outcome: BuildOutcome
@@ -319,3 +356,11 @@ def _uuid(value: str) -> uuid.UUID:
         return uuid.UUID(str(value))
     except (ValueError, AttributeError) as exc:
         raise ValueError(f"not a UUID: {value!r}") from exc
+
+
+def _builder_digest(image: str | None) -> str:
+    if image and "@" in image:
+        candidate = image.rsplit("@", 1)[1]
+        if len(candidate) == 71 and candidate.startswith("sha256:"):
+            return candidate
+    return "sha256:" + "0" * 64

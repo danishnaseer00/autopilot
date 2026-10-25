@@ -7,6 +7,7 @@ members = [
     "autopilot-build",
     "autopilot-control",
     "autopilot-paas",
+    "autopilot-research",
     "autopilot-runtime",
     "platform-shared",
 ]
@@ -138,6 +139,7 @@ version = "0.1.0"
 source = { editable = "control" }
 dependencies = [
     { name = "asyncpg" },
+    { name = "autopilot-runtime" },
     { name = "fastapi" },
     { name = "platform-shared" },
     { name = "psycopg", extra = ["binary"] },
@@ -148,6 +150,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "autopilot-runtime", editable = "runtime" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "platform-shared", editable = "shared" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
@@ -162,6 +165,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "autopilot-build" },
     { name = "autopilot-control" },
+    { name = "autopilot-research" },
     { name = "autopilot-runtime" },
     { name = "platform-shared" },
 ]
@@ -176,6 +180,7 @@ dev = [
 requires-dist = [
     { name = "autopilot-build", editable = "build" },
     { name = "autopilot-control", editable = "control" },
+    { name = "autopilot-research", editable = "autopilot" },
     { name = "autopilot-runtime", editable = "runtime" },
     { name = "platform-shared", editable = "shared" },
 ]
@@ -185,6 +190,26 @@ dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8.0" },
 ]
+
+[[package]]
+name = "autopilot-research"
+version = "0.1.0"
+source = { editable = "autopilot" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "autopilot-runtime"

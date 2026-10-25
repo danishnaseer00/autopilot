@@ -14,16 +14,18 @@ dependencies = [
   "autopilot-control",
   "autopilot-build",
   "autopilot-runtime",
+  "autopilot-research",
 ]
 
 [tool.uv.workspace]
-members = ["shared", "control", "build", "runtime"]
+members = ["shared", "control", "build", "runtime", "autopilot"]
 
 [tool.uv.sources]
 platform-shared = { workspace = true }
 autopilot-control = { workspace = true }
 autopilot-build = { workspace = true }
 autopilot-runtime = { workspace = true }
+autopilot-research = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -32,5 +34,6 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["shared/tests", "control/tests", "build/tests", "runtime/tests", "tests"]
+testpaths = ["shared/tests", "control/tests", "build/tests", "runtime/tests", "autopilot/tests", "tests"]
+pythonpath = ["autopilot/src"]
 addopts = "-q"

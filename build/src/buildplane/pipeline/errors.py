@@ -123,6 +123,28 @@ class SandboxTimeout(SandboxFailure):
         )
 
 
+class PublishError(PipelineError):
+    """The built artifact could not be published or verified.
+
+    A registry outage is transient; a rejected image identity or a digest
+    mismatch is not. Callers choose via ``retryable``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        code: str = "publish_failed",
+    ) -> None:
+        super().__init__(
+            message,
+            stage="publish",
+            retryable=retryable,
+            code=code,
+        )
+
+
 class SecretRedactionUnavailable(PipelineError):
     """Fail closed rather than persist logs that may contain a known secret."""
 

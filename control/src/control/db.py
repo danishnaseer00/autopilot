@@ -28,6 +28,22 @@ from control.settings import Settings
 _TENANT_TABLES_HINT = "queries must also carry explicit org_id predicates (SPEC-03 R-4)"
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Decode json/jsonb to Python objects, not strings.
+
+    asyncpg leaves JSONB as text by default. The API models and the secret/
+    deployment services all expect mappings; doing this at the pool boundary
+    avoids a per-call `json.loads` that one new route would forget.
+    """
+    for type_name in ("json", "jsonb"):
+        await conn.set_type_codec(
+            type_name,
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema="pg_catalog",
+        )
+
+
 class Db:
     """Owns both pools. Created via create_app's lifespan."""
 
@@ -38,17 +54,48 @@ class Db:
     async def connect(self, settings: Settings) -> None:
         if settings.app_database_url and self.pool is None:
             self.pool = await asyncpg.create_pool(
-                settings.app_database_url, min_size=1, max_size=5
+                settings.app_database_url,
+                min_size=1,
+                max_size=5,
+                init=_init_connection,
             )
         if settings.audit_database_url and self.audit_pool is None:
             self.audit_pool = await asyncpg.create_pool(
-                settings.audit_database_url, min_size=0, max_size=2
+                settings.audit_database_url,
+                min_size=0,
+                max_size=2,
+                init=_init_connection,
             )
 
     async def close(self) -> None:
         for pool in (self.pool, self.audit_pool):
             if pool is not None:
                 await pool.close()
+
+
+@asynccontextmanager
+async def user_scope(db: Db, user_id: str | uuid.UUID):
+    """Transaction-local user context for the sessions table.
+
+    A user is a platform identity, not a tenant. Session creation, rotation and
+    logout happen before (or without) an org, so they use this narrower scope.
+    """
+    if db.pool is None:
+        raise RuntimeError("database pool is not configured (set app_database_url)")
+    conn = await db.pool.acquire()
+    try:
+        tx = conn.transaction()
+        await tx.start()
+        await conn.execute("SELECT set_config('app.user_id', $1, true)", str(user_id))
+        try:
+            yield conn
+        except BaseException:
+            await tx.rollback()
+            raise
+        else:
+            await tx.commit()
+    finally:
+        await db.pool.release(conn)
 
 
 @asynccontextmanager
@@ -118,4 +165,4 @@ async def write_audit(
     )
 
 
-__all__ = ["Db", "tenant_scope", "write_audit", _TENANT_TABLES_HINT]
+__all__ = ["Db", "tenant_scope", "user_scope", "write_audit", _TENANT_TABLES_HINT]

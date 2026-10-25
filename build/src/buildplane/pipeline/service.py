@@ -11,8 +11,8 @@ import asyncio
 import inspect
 import json
 import tempfile
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
@@ -27,6 +27,15 @@ from buildplane.pipeline.cache import (
     build_cache_key,
     dependency_cache_key,
     hash_output_tree,
+)
+from buildplane.pipeline.models import (
+    BuildOutcome,
+    ClaimedJob,
+    PublishedImage,
+    Redactor,
+    SandboxResult,
+    SecretProvider,
+    Stage,
 )
 from buildplane.pipeline.commands import build_argv
 from buildplane.pipeline.errors import (
@@ -47,14 +56,6 @@ from buildplane.pipeline.manifest_resolution import (
     normalise_source,
     select_service,
     synthesise_manifest,
-)
-from buildplane.pipeline.models import (
-    BuildOutcome,
-    ClaimedJob,
-    Redactor,
-    SandboxResult,
-    SecretProvider,
-    Stage,
 )
 from buildplane.pipeline.reporting import BuildReporter
 from buildplane.pipeline.sandbox import (
@@ -91,6 +92,18 @@ class FetchTokenProvider(Protocol):
     async def token_for(self, claim: ClaimedJob) -> str | None: ...
 
 
+class ArtifactPublisher(Protocol):
+    """Turn a successful build tree into a verified, digest-pinned image."""
+
+    async def publish(
+        self,
+        *,
+        claim: ClaimedJob,
+        outcome: BuildOutcome,
+        source_dir: Path,
+    ) -> PublishedImage: ...
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -113,12 +126,14 @@ class BuildPipeline:
         cache,
         supply_chain: SupplyChainControls,
         redactor_factory: Callable[[Mapping[str, str]], Redactor],
+        publisher: ArtifactPublisher | None = None,
         secret_provider: SecretProvider | None = None,
         fetch_token_provider: FetchTokenProvider | None = None,
         artifact_hasher: Callable[..., str] = hash_output_tree,
         resources: SandboxResources | None = None,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         heartbeat_seconds: int = 15,
+        org_ids: Sequence[str] | None = None,
         clock: Callable[[], datetime] = _utcnow,
         on_log_opened: Callable[[LogStream], None] | None = None,
     ) -> None:
@@ -131,17 +146,21 @@ class BuildPipeline:
         self.cache = cache
         self.supply_chain = supply_chain
         self.redactor_factory = redactor_factory
+        self.publisher = publisher
         self.secret_provider = secret_provider
         self.fetch_token_provider = fetch_token_provider
         self.artifact_hasher = artifact_hasher
         self.resources = resources or SandboxResources()
         self.timeout_seconds = timeout_seconds
         self.heartbeat_seconds = heartbeat_seconds
+        self.org_ids = tuple(org_ids) if org_ids else None
         self._clock = clock
         self.on_log_opened = on_log_opened
 
     async def run_once(self, worker_id: str) -> BuildOutcome | None:
-        claim = await self.queue.claim(worker_id, now=self._clock())
+        claim = await self.queue.claim(
+            worker_id, now=self._clock(), org_ids=self.org_ids
+        )
         if claim is None:
             return None
         return await self.run_claim(claim, worker_id=worker_id)
@@ -337,6 +356,7 @@ class BuildPipeline:
             ) from exc
 
         cached = await self._cache_get(key, stream)
+        source_dir = _source_dir(fetched, strategy.source)
         if cached is not None:
             _safe_log(
                 stream,
@@ -361,8 +381,9 @@ class BuildPipeline:
                 + strategy.detection.warnings
                 + supply_plan.warnings,
             )
-            await self._finish_success(claim, outcome, stream)
-            return outcome
+            return await self._finish_success(
+                claim, outcome, stream, source_dir=source_dir
+            )
 
         progress.stage = Stage.BUILD
         command = build_argv(
@@ -373,7 +394,6 @@ class BuildPipeline:
             allowed_install_scripts=supply_plan.allowed_install_scripts,
         )
         container_name = new_container_name(claim.deployment_id, claim.git_sha)
-        source_dir = _source_dir(fetched, strategy.source)
         config = build_sandbox_config(
             image=build_image,
             argv=command.argv,
@@ -437,8 +457,9 @@ class BuildPipeline:
             + strategy.detection.warnings
             + supply_plan.warnings,
         )
-        await self._finish_success(claim, outcome, stream)
-        return outcome
+        return await self._finish_success(
+            claim, outcome, stream, source_dir=source_dir
+        )
 
     def _resolve_detection(
         self,
@@ -490,10 +511,30 @@ class BuildPipeline:
         )
 
     async def _finish_success(
-        self, claim: ClaimedJob, outcome: BuildOutcome, stream: LogStream
-    ) -> None:
+        self,
+        claim: ClaimedJob,
+        outcome: BuildOutcome,
+        stream: LogStream,
+        *,
+        source_dir: Path,
+    ) -> BuildOutcome:
+        if self.publisher is not None:
+            published = await self.publisher.publish(
+                claim=claim,
+                outcome=outcome,
+                source_dir=source_dir,
+            )
+            outcome = replace(
+                outcome,
+                revision=published.revision,
+                image_digest=published.digest,
+                image_registry=published.registry,
+                image_repository=published.repository,
+                image_size_bytes=published.size_bytes,
+            )
         stream.close()
         await self.reporter.report_success(claim, outcome)
+        return outcome
 
     async def _resolve_build_env(self, claim: ClaimedJob) -> dict[str, str]:
         keys = tuple(claim.build_env_keys)

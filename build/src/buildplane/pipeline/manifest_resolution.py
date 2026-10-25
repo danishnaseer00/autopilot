@@ -41,6 +41,10 @@ def load_manifest(
     """
 
     if stored is not None:
+        if not stored:
+            # A queued row created before detection has an empty placeholder.
+            # It is not a customer-authored manifest; detect and synthesise.
+            return None, ()
         try:
             return ManifestDocument.model_validate(stored), ()
         except Exception as exc:

@@ -50,6 +50,26 @@ class ClaimedJob:
 
 
 @dataclass(frozen=True, slots=True)
+class PublishedImage:
+    """A verified image reference returned by an artifact publisher.
+
+    ``registry`` is the pull address recorded for the runtime plane. It may
+    differ from the push address (for example ``localhost:5001`` on the host
+    versus ``k3d-autopilot-registry:5001`` inside the cluster).
+    """
+
+    revision: str
+    digest: str
+    registry: str
+    repository: str
+    size_bytes: int = 0
+
+    @property
+    def reference(self) -> str:
+        return f"{self.registry}/{self.repository}@{self.digest}"
+
+
+@dataclass(frozen=True, slots=True)
 class BuildOutcome:
     """The result of one claim, whether it succeeded or failed."""
 
@@ -70,6 +90,11 @@ class BuildOutcome:
     output_hash: str | None = None
     node_version: int | None = None
     warnings: tuple[str, ...] = ()
+    revision: str | None = None
+    image_digest: str | None = None
+    image_registry: str | None = None
+    image_repository: str | None = None
+    image_size_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

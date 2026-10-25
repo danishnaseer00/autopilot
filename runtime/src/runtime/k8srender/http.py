@@ -69,6 +69,10 @@ _KINDS: dict[tuple[str, str], _Kind] = {
         "NetworkPolicy",
     ): _Kind("networking.k8s.io", "v1", "networkpolicies"),
     (
+        "networking.k8s.io/v1",
+        "Ingress",
+    ): _Kind("networking.k8s.io", "v1", "ingresses"),
+    (
         "rbac.authorization.k8s.io/v1",
         "Role",
     ): _Kind("rbac.authorization.k8s.io", "v1", "roles"),
