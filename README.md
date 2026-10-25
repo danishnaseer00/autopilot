@@ -70,17 +70,17 @@ That split keeps retries, audit trails, and failure handling in one place instea
 ## Architecture
 
 ```mermaid
-flowchart LR
-    Browser["React console"] -->|"/api/v1"| API["FastAPI control plane"]
-    API --> PG[("PostgreSQL 16<br/>RLS · jobs · audit")]
-    API -.-> Redis[("Redis 7<br/>optional cache")]
-    Build["Build worker"] -->|"claim build jobs"| PG
-    Build -->|"publish digest-pinned image"| Registry[("OCI registry")]
-    Runtime["Runtime worker"] -->|"apply manifests"| K8s["k3d / k3s"]
-    Runtime -->|"cut route"| Ingress["NGINX ingress"]
+graph LR
+    Browser["React console"] -->|REST| Control["FastAPI control plane"]
+    Control -->|state| Database["PostgreSQL 16"]
+    Control -.->|cache| Cache["Redis 7"]
+    Build["Build worker"] -->|jobs| Database
+    Build -->|images| Registry["OCI registry"]
+    Runtime["Runtime worker"] -->|manifests| Cluster["k3d / k3s"]
+    Runtime -->|routes| Ingress["NGINX ingress"]
     Ingress --> Apps["Project workloads"]
-    Autopilot["Autopilot research plane"] -.->|"fault plans · evidence"| K8s
-    Autopilot -.->|"incident evidence"| API
+    Autopilot["Autopilot research plane"] -.->|plans| Cluster
+    Autopilot -.->|evidence| Control
 ```
 
 | Component | Responsibility | Entry point |
